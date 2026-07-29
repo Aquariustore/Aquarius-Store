@@ -230,9 +230,18 @@
           <label>Preço (R$)</label>
           <input type="number" id="pPrice" step="0.01" placeholder="Ex: 129.90">
         </div>
-        <div class="field">
+        <div class="field" style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="pHasColors" onchange="toggleColorMode()" style="width:auto;margin:0;">
+          <label style="margin:0;">Esse produto tem cores diferentes?</label>
+        </div>
+        <div class="field" id="simpleStockField">
           <label>Estoque (quantidade)</label>
           <input type="number" id="pStock" step="1" placeholder="Ex: 5">
+        </div>
+        <div class="field" id="colorStockField" style="display:none;">
+          <label>Cores e estoque de cada uma</label>
+          <div id="colorRows"></div>
+          <button type="button" class="icon-btn" onclick="addColorRow()">+ Adicionar cor</button>
         </div>
         <div class="field">
           <label>Foto do produto</label>
@@ -329,11 +338,52 @@ function toggleSubcategoryField(){
   document.getElementById('subcategoryField').style.display = isCasa ? 'block' : 'none';
 }
 
+/* ---------- COLOR VARIANTS ---------- */
+function toggleColorMode(){
+  const hasColors = document.getElementById('pHasColors').checked;
+  document.getElementById('simpleStockField').style.display = hasColors ? 'none' : 'block';
+  document.getElementById('colorStockField').style.display = hasColors ? 'block' : 'none';
+  if(hasColors && document.getElementById('colorRows').children.length === 0){
+    addColorRow();
+  }
+}
+
+function addColorRow(color, stock){
+  const el = document.getElementById('colorRows');
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center;';
+  row.innerHTML = `
+    <input type="text" placeholder="Cor (ex: Preto)" class="color-name" style="margin-bottom:0;flex:2;" value="${color||''}">
+    <input type="number" placeholder="Estoque" class="color-stock" style="margin-bottom:0;flex:1;" value="${stock!=null?stock:''}">
+    <button type="button" class="icon-btn" onclick="this.parentElement.remove()">✕</button>
+  `;
+  el.appendChild(row);
+}
+
+function getColorRowsData(){
+  const rows = document.querySelectorAll('#colorRows > div');
+  const result = [];
+  rows.forEach(row => {
+    const name = row.querySelector('.color-name').value.trim();
+    const stock = parseInt(row.querySelector('.color-stock').value, 10);
+    if(name && !isNaN(stock)) result.push({ color: name, stock });
+  });
+  return result;
+}
+
 /* ---------- PRODUCTS ---------- */
 async function loadProducts(){
   const { data, error } = await sb.from('products').select('*').order('created_at', {ascending:false});
   if(error){ showToast('Erro ao carregar produtos'); console.error(error); return; }
   products = data || [];
+
+  const { data: variantData, error: variantError } = await sb.from('product_variants').select('*');
+  if(!variantError && variantData){
+    products.forEach(p => {
+      p.variants = variantData.filter(v => v.product_id === p.id);
+    });
+  }
+
   renderProductList();
 }
 
@@ -343,21 +393,27 @@ function renderProductList(){
     el.innerHTML = '<p style="font-size:13px;color:#888;">Nenhum produto cadastrado ainda.</p>';
     return;
   }
-  el.innerHTML = products.map(p => `
+  el.innerHTML = products.map(p => {
+    const hasVariants = p.variants && p.variants.length > 0;
+    const stockControl = hasVariants
+      ? `<div style="font-size:11px;color:#555;text-align:right;">${p.variants.map(v => `${v.color}: <input type="number" style="width:40px;padding:2px;text-align:center;border-radius:4px;border:1px solid var(--line);margin:0 2px;" value="${v.stock}" onchange="updateVariantStock('${v.id}', this.value)">`).join('<br>')}</div>`
+      : `<input type="number" class="stock-input" value="${p.stock}" onchange="updateStock('${p.id}', this.value)">`;
+    return `
     <div class="product-row">
       <img class="product-thumb" src="${p.image_url || ''}" onerror="this.style.background='#eee'; this.src='';">
       <div class="product-info">
         <div class="product-name">${p.name} ${!p.active ? '<span class=\"inactive-tag\">INATIVO</span>' : ''}</div>
         <div class="product-sub">${p.category}${p.subcategory ? ' • '+p.subcategory : ''} • R$ ${Number(p.price).toFixed(2).replace('.',',')}</div>
       </div>
-      <input type="number" class="stock-input" value="${p.stock}" onchange="updateStock('${p.id}', this.value)">
+      ${stockControl}
       <div class="product-actions">
         <button class="icon-btn" onclick="editProduct('${p.id}')">Editar</button>
         <button class="icon-btn" onclick="toggleActive('${p.id}', ${p.active})">${p.active ? 'Ocultar' : 'Ativar'}</button>
         <button class="icon-btn" onclick="deleteProduct('${p.id}')">Excluir</button>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 }
 
 async function updateStock(id, value){
@@ -367,6 +423,14 @@ async function updateStock(id, value){
   if(error){ showToast('Erro ao atualizar estoque'); return; }
   const p = products.find(x=>x.id===id);
   if(p) p.stock = stock;
+  showToast('Estoque atualizado');
+}
+
+async function updateVariantStock(variantId, value){
+  const stock = parseInt(value, 10);
+  if(isNaN(stock) || stock < 0){ showToast('Quantidade inválida'); return; }
+  const { error } = await sb.from('product_variants').update({ stock }).eq('id', variantId);
+  if(error){ showToast('Erro ao atualizar estoque'); return; }
   showToast('Estoque atualizado');
 }
 
@@ -394,9 +458,20 @@ function editProduct(id){
   toggleSubcategoryField();
   if(p.subcategory) document.getElementById('pSubcategory').value = p.subcategory;
   document.getElementById('pPrice').value = p.price;
-  document.getElementById('pStock').value = p.stock;
   document.getElementById('pExistingImage').value = p.image_url || '';
   document.getElementById('cancelEditBtn').style.display = 'block';
+
+  const hasVariants = p.variants && p.variants.length > 0;
+  document.getElementById('pHasColors').checked = hasVariants;
+  document.getElementById('colorRows').innerHTML = '';
+  if(hasVariants){
+    p.variants.forEach(v => addColorRow(v.color, v.stock));
+    document.getElementById('pStock').value = '';
+  } else {
+    document.getElementById('pStock').value = p.stock;
+  }
+  toggleColorMode();
+
   window.scrollTo({top:0, behavior:'smooth'});
 }
 
@@ -410,6 +485,9 @@ function resetForm(){
   document.getElementById('pStock').value = '';
   document.getElementById('pImage').value = '';
   document.getElementById('pExistingImage').value = '';
+  document.getElementById('pHasColors').checked = false;
+  document.getElementById('colorRows').innerHTML = '';
+  toggleColorMode();
   document.getElementById('cancelEditBtn').style.display = 'none';
 }
 
@@ -419,12 +497,18 @@ async function saveProduct(){
   const category = document.getElementById('pCategory').value;
   const subcategory = category === 'Casa, mesa e banho' ? document.getElementById('pSubcategory').value : null;
   const price = parseFloat(document.getElementById('pPrice').value);
-  const stock = parseInt(document.getElementById('pStock').value, 10);
+  const hasColors = document.getElementById('pHasColors').checked;
+  const colorRows = hasColors ? getColorRowsData() : [];
+  const stock = hasColors ? colorRows.reduce((sum, c) => sum + c.stock, 0) : parseInt(document.getElementById('pStock').value, 10);
   const file = document.getElementById('pImage').files[0];
   let imageUrl = document.getElementById('pExistingImage').value || null;
 
   if(!name || !category || isNaN(price) || isNaN(stock)){
     showToast('Preencha todos os campos obrigatórios');
+    return;
+  }
+  if(hasColors && colorRows.length === 0){
+    showToast('Adicione pelo menos uma cor com estoque');
     return;
   }
 
@@ -448,22 +532,36 @@ async function saveProduct(){
 
   const payload = { name, category, subcategory, price, stock, image_url: imageUrl };
 
-  let error;
+  let error, productId = id;
   if(id){
     ({ error } = await sb.from('products').update(payload).eq('id', id));
   } else {
     payload.active = true;
-    ({ error } = await sb.from('products').insert(payload));
+    const { data: inserted, error: insertError } = await sb.from('products').insert(payload).select().single();
+    error = insertError;
+    if(inserted) productId = inserted.id;
   }
 
-  document.getElementById('saveBtn').textContent = 'Salvar produto';
-  document.getElementById('saveBtn').disabled = false;
-
   if(error){
+    document.getElementById('saveBtn').textContent = 'Salvar produto';
+    document.getElementById('saveBtn').disabled = false;
     showToast('Erro ao salvar produto');
     console.error(error);
     return;
   }
+
+  // Sync color variants: remove old ones, insert current set
+  if(productId){
+    await sb.from('product_variants').delete().eq('product_id', productId);
+    if(hasColors && colorRows.length > 0){
+      const variantPayload = colorRows.map(c => ({ product_id: productId, color: c.color, stock: c.stock }));
+      const { error: variantError } = await sb.from('product_variants').insert(variantPayload);
+      if(variantError){ console.error(variantError); showToast('Produto salvo, mas houve erro nas cores'); }
+    }
+  }
+
+  document.getElementById('saveBtn').textContent = 'Salvar produto';
+  document.getElementById('saveBtn').disabled = false;
 
   showToast('Produto salvo com sucesso');
   resetForm();
