@@ -219,12 +219,7 @@
         </div>
         <div class="field" id="subcategoryField" style="display:none;">
           <label>Subcategoria</label>
-          <select id="pSubcategory">
-            <option value="Roupas de cama">Roupas de cama</option>
-            <option value="Utensílios de banheiro">Utensílios de banheiro</option>
-            <option value="Cozinha">Cozinha</option>
-            <option value="Decoração">Decoração</option>
-          </select>
+          <select id="pSubcategory"></select>
         </div>
         <div class="field">
           <label>Preço (R$)</label>
@@ -242,6 +237,10 @@
           <label>Cores e estoque de cada uma</label>
           <div id="colorRows"></div>
           <button type="button" class="icon-btn" onclick="addColorRow()">+ Adicionar cor</button>
+        </div>
+        <div class="field">
+          <label>Descrição do produto</label>
+          <textarea id="pDescription" rows="3" placeholder="Detalhes, tecido, medidas, etc." style="width:100%;padding:12px 14px;border-radius:10px;border:1px solid var(--line);font-family:'Manrope',sans-serif;font-size:14px;resize:vertical;"></textarea>
         </div>
         <div class="field">
           <label>Foto do produto</label>
@@ -274,6 +273,15 @@
         <p class="error-msg" id="passError">Senha atual incorreta.</p>
         <button class="btn" onclick="changePassword()">Atualizar senha</button>
       </div>
+
+      <div class="card-box">
+        <h2>Subcategorias de "Casa, mesa e banho"</h2>
+        <div id="subcategoryList" style="margin-bottom:14px;"></div>
+        <div class="field" style="display:flex;gap:8px;">
+          <input type="text" id="newSubcategoryName" placeholder="Nova subcategoria (ex: Tapetes)" style="margin-bottom:0;">
+          <button class="btn" style="width:auto;padding:12px 18px;" onclick="addSubcategory()">Adicionar</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -286,6 +294,55 @@ const SUPABASE_KEY = "sb_publishable_gYkQcuXvc2VGsonYMz3HiQ_hMWvSICg";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 let products = [];
+let subcategories = [];
+
+async function loadSubcategories(){
+  const { data, error } = await sb.from('subcategories').select('*').eq('category', 'Casa, mesa e banho').order('name');
+  if(error){ console.error(error); return; }
+  subcategories = data || [];
+  populateSubcategorySelect();
+  renderSubcategoryList();
+}
+
+function populateSubcategorySelect(){
+  const select = document.getElementById('pSubcategory');
+  const current = select.value;
+  select.innerHTML = subcategories.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+  if(current) select.value = current;
+}
+
+function renderSubcategoryList(){
+  const el = document.getElementById('subcategoryList');
+  if(subcategories.length === 0){
+    el.innerHTML = '<p style="font-size:13px;color:#888;">Nenhuma subcategoria cadastrada.</p>';
+    return;
+  }
+  el.innerHTML = subcategories.map(s => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);">
+      <span style="font-size:13.5px;">${s.name}</span>
+      <button class="icon-btn" onclick="deleteSubcategory('${s.id}')">Excluir</button>
+    </div>
+  `).join('');
+}
+
+async function addSubcategory(){
+  const input = document.getElementById('newSubcategoryName');
+  const name = input.value.trim();
+  if(!name){ showToast('Digite o nome da subcategoria'); return; }
+  const { error } = await sb.from('subcategories').insert({ category: 'Casa, mesa e banho', name });
+  if(error){ showToast('Erro ao adicionar'); console.error(error); return; }
+  input.value = '';
+  showToast('Subcategoria adicionada');
+  loadSubcategories();
+}
+
+async function deleteSubcategory(id){
+  if(!confirm('Excluir essa subcategoria? Produtos que já usam ela mantêm o texto salvo, mas ela some da lista de opções.')) return;
+  const { error } = await sb.from('subcategories').delete().eq('id', id);
+  if(error){ showToast('Erro ao excluir'); return; }
+  showToast('Subcategoria excluída');
+  loadSubcategories();
+}
 
 function showToast(msg){
   const t = document.getElementById('toast');
@@ -307,6 +364,7 @@ async function tryLogin(){
     document.getElementById('loginScreen').style.display = 'none';
     document.getElementById('adminScreen').style.display = 'block';
     loadProducts();
+    loadSubcategories();
   } else {
     document.getElementById('loginError').style.display = 'block';
   }
@@ -323,6 +381,7 @@ if(sessionStorage.getItem('aquarius_admin') === 'true'){
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('adminScreen').style.display = 'block';
   loadProducts();
+  loadSubcategories();
 }
 
 /* ---------- SECTION TABS ---------- */
@@ -458,6 +517,7 @@ function editProduct(id){
   toggleSubcategoryField();
   if(p.subcategory) document.getElementById('pSubcategory').value = p.subcategory;
   document.getElementById('pPrice').value = p.price;
+  document.getElementById('pDescription').value = p.description || '';
   document.getElementById('pExistingImage').value = p.image_url || '';
   document.getElementById('cancelEditBtn').style.display = 'block';
 
@@ -482,6 +542,7 @@ function resetForm(){
   document.getElementById('pCategory').value = 'Moda feminina';
   toggleSubcategoryField();
   document.getElementById('pPrice').value = '';
+  document.getElementById('pDescription').value = '';
   document.getElementById('pStock').value = '';
   document.getElementById('pImage').value = '';
   document.getElementById('pExistingImage').value = '';
@@ -497,6 +558,7 @@ async function saveProduct(){
   const category = document.getElementById('pCategory').value;
   const subcategory = category === 'Casa, mesa e banho' ? document.getElementById('pSubcategory').value : null;
   const price = parseFloat(document.getElementById('pPrice').value);
+  const description = document.getElementById('pDescription').value.trim() || null;
   const hasColors = document.getElementById('pHasColors').checked;
   const colorRows = hasColors ? getColorRowsData() : [];
   const stock = hasColors ? colorRows.reduce((sum, c) => sum + c.stock, 0) : parseInt(document.getElementById('pStock').value, 10);
@@ -530,7 +592,7 @@ async function saveProduct(){
     imageUrl = urlData.publicUrl;
   }
 
-  const payload = { name, category, subcategory, price, stock, image_url: imageUrl };
+  const payload = { name, category, subcategory, price, stock, image_url: imageUrl, description };
 
   let error, productId = id;
   if(id){
