@@ -304,11 +304,20 @@ async function loadSubcategories(){
   renderSubcategoryList();
 }
 
-function populateSubcategorySelect(){
+function populateSubcategorySelect(keepValue){
   const select = document.getElementById('pSubcategory');
-  const current = select.value;
+  const current = keepValue !== undefined ? keepValue : select.value;
   select.innerHTML = subcategories.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
-  if(current) select.value = current;
+  if(current){
+    const exists = subcategories.some(s => s.name === current);
+    if(!exists){
+      const opt = document.createElement('option');
+      opt.value = current;
+      opt.textContent = `${current} (removida)`;
+      select.appendChild(opt);
+    }
+    select.value = current;
+  }
 }
 
 function renderSubcategoryList(){
@@ -344,11 +353,11 @@ async function deleteSubcategory(id){
   loadSubcategories();
 }
 
-function showToast(msg){
+function showToast(msg, detail){
   const t = document.getElementById('toast');
-  t.textContent = msg;
+  t.textContent = detail ? `${msg}: ${detail}` : msg;
   t.style.display = 'block';
-  setTimeout(()=> t.style.display='none', 2500);
+  setTimeout(()=> t.style.display='none', detail ? 6000 : 2500);
 }
 
 /* ---------- LOGIN ---------- */
@@ -515,7 +524,9 @@ function editProduct(id){
   document.getElementById('pName').value = p.name;
   document.getElementById('pCategory').value = p.category;
   toggleSubcategoryField();
-  if(p.subcategory) document.getElementById('pSubcategory').value = p.subcategory;
+  if(p.category === 'Casa, mesa e banho'){
+    populateSubcategorySelect(p.subcategory || '');
+  }
   document.getElementById('pPrice').value = p.price;
   document.getElementById('pDescription').value = p.description || '';
   document.getElementById('pExistingImage').value = p.image_url || '';
@@ -569,6 +580,10 @@ async function saveProduct(){
     showToast('Preencha todos os campos obrigatórios');
     return;
   }
+  if(category === 'Casa, mesa e banho' && !subcategory){
+    showToast('Cadastre uma subcategoria em Configurações antes de salvar, ou selecione uma');
+    return;
+  }
   if(hasColors && colorRows.length === 0){
     showToast('Adicione pelo menos uma cor com estoque');
     return;
@@ -582,7 +597,7 @@ async function saveProduct(){
     const fileName = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
     const { error: uploadError } = await sb.storage.from('product-images').upload(fileName, file);
     if(uploadError){
-      showToast('Erro ao enviar foto');
+      showToast('Erro ao enviar foto', uploadError.message);
       document.getElementById('saveBtn').textContent = 'Salvar produto';
       document.getElementById('saveBtn').disabled = false;
       console.error(uploadError);
@@ -607,7 +622,7 @@ async function saveProduct(){
   if(error){
     document.getElementById('saveBtn').textContent = 'Salvar produto';
     document.getElementById('saveBtn').disabled = false;
-    showToast('Erro ao salvar produto');
+    showToast('Erro ao salvar produto', error.message);
     console.error(error);
     return;
   }
