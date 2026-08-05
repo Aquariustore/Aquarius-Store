@@ -165,6 +165,33 @@
     font-weight:700;
     margin-left:6px;
   }
+
+  /* SALES LIST */
+  .sale-row{
+    padding:12px 0;
+    border-bottom:1px solid var(--line);
+  }
+  .sale-top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-start;
+    gap:10px;
+    margin-bottom:8px;
+  }
+  .sale-info{ flex:1; min-width:0; }
+  .sale-name{ font-size:13.5px; font-weight:600; }
+  .sale-sub{ font-size:12px; color:#777; }
+  .sale-controls{
+    display:flex;
+    gap:8px;
+    flex-wrap:wrap;
+  }
+  .sale-controls select{
+    width:auto;
+    margin-bottom:0;
+    font-size:12px;
+    padding:6px 8px;
+  }
   #toast{
     position:fixed;
     bottom:20px; left:50%; transform:translateX(-50%);
@@ -198,6 +225,7 @@
   <div class="wrap">
     <div class="section-tabs">
       <div class="section-tab active" id="tabProducts" onclick="showSection('products')">Produtos</div>
+      <div class="section-tab" id="tabSales" onclick="showSection('sales')">Vendas</div>
       <div class="section-tab" id="tabSettings" onclick="showSection('settings')">Configurações</div>
     </div>
 
@@ -255,6 +283,52 @@
       <div class="card-box">
         <h2>Produtos cadastrados</h2>
         <div id="productList">Carregando...</div>
+      </div>
+    </div>
+
+    <!-- SALES SECTION -->
+    <div id="sectionSales" style="display:none;">
+      <div class="card-box">
+        <h2>Registrar saída de estoque</h2>
+        <div class="field">
+          <label>Produto</label>
+          <select id="saleProduct"></select>
+        </div>
+        <div class="field">
+          <label>Quantidade</label>
+          <input type="number" id="saleQuantity" min="1" step="1" value="1">
+        </div>
+        <div class="field">
+          <label>Nome do cliente</label>
+          <input type="text" id="saleClient" placeholder="Ex: Maria Silva">
+        </div>
+        <div class="field">
+          <label>Conta</label>
+          <select id="saleAccount">
+            <option value="Thamirys">Thamirys</option>
+            <option value="Renata">Renata</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Status de entrega</label>
+          <select id="saleDeliveryStatus">
+            <option value="Reservado">Reservado</option>
+            <option value="Entregue">Entregue</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Status de pagamento</label>
+          <select id="salePaymentStatus">
+            <option value="Pendente">Pendente</option>
+            <option value="Pago">Pago</option>
+          </select>
+        </div>
+        <button class="btn" id="saveSaleBtn" onclick="saveSale()">Registrar saída</button>
+      </div>
+
+      <div class="card-box">
+        <h2>Histórico de vendas</h2>
+        <div id="salesList">Carregando...</div>
       </div>
     </div>
 
@@ -396,9 +470,15 @@ if(sessionStorage.getItem('aquarius_admin') === 'true'){
 /* ---------- SECTION TABS ---------- */
 function showSection(section){
   document.getElementById('sectionProducts').style.display = section==='products' ? 'block' : 'none';
+  document.getElementById('sectionSales').style.display = section==='sales' ? 'block' : 'none';
   document.getElementById('sectionSettings').style.display = section==='settings' ? 'block' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', section==='products');
+  document.getElementById('tabSales').classList.toggle('active', section==='sales');
   document.getElementById('tabSettings').classList.toggle('active', section==='settings');
+  if(section === 'sales'){
+    populateSaleProductSelect();
+    loadSales();
+  }
 }
 
 function toggleSubcategoryField(){
@@ -643,6 +723,124 @@ async function saveProduct(){
   showToast('Produto salvo com sucesso');
   resetForm();
   loadProducts();
+}
+
+/* ---------- SALES ---------- */
+function populateSaleProductSelect(){
+  const select = document.getElementById('saleProduct');
+  const current = select.value;
+  select.innerHTML = products
+    .filter(p => p.active)
+    .map(p => `<option value="${p.id}">${p.name} (estoque: ${p.stock})</option>`)
+    .join('');
+  if(current) select.value = current;
+}
+
+async function saveSale(){
+  const productId = document.getElementById('saleProduct').value;
+  const quantity = parseInt(document.getElementById('saleQuantity').value, 10);
+  const clientName = document.getElementById('saleClient').value.trim() || null;
+  const account = document.getElementById('saleAccount').value;
+  const deliveryStatus = document.getElementById('saleDeliveryStatus').value;
+  const paymentStatus = document.getElementById('salePaymentStatus').value;
+
+  if(!productId){ showToast('Selecione um produto'); return; }
+  if(isNaN(quantity) || quantity < 1){ showToast('Quantidade inválida'); return; }
+
+  const product = products.find(p => p.id === productId);
+  if(!product){ showToast('Produto não encontrado'); return; }
+  if(quantity > product.stock){ showToast(`Estoque insuficiente (disponível: ${product.stock})`); return; }
+
+  document.getElementById('saveSaleBtn').textContent = 'Salvando...';
+  document.getElementById('saveSaleBtn').disabled = true;
+
+  const { error: saleError } = await sb.from('sales').insert({
+    product_id: productId,
+    product_name: product.name,
+    quantity,
+    client_name: clientName,
+    account,
+    delivery_status: deliveryStatus,
+    payment_status: paymentStatus
+  });
+
+  if(saleError){
+    showToast('Erro ao registrar saída', saleError.message);
+    console.error(saleError);
+    document.getElementById('saveSaleBtn').textContent = 'Registrar saída';
+    document.getElementById('saveSaleBtn').disabled = false;
+    return;
+  }
+
+  const newStock = product.stock - quantity;
+  const { error: stockError } = await sb.from('products').update({ stock: newStock }).eq('id', productId);
+  if(stockError){
+    showToast('Venda registrada, mas houve erro ao atualizar o estoque', stockError.message);
+    console.error(stockError);
+  } else {
+    product.stock = newStock;
+  }
+
+  document.getElementById('saveSaleBtn').textContent = 'Registrar saída';
+  document.getElementById('saveSaleBtn').disabled = false;
+  document.getElementById('saleQuantity').value = 1;
+  document.getElementById('saleClient').value = '';
+
+  showToast('Saída registrada com sucesso');
+  populateSaleProductSelect();
+  loadSales();
+}
+
+async function loadSales(){
+  const { data, error } = await sb.from('sales').select('*').order('created_at', {ascending:false});
+  if(error){ showToast('Erro ao carregar vendas', error.message); console.error(error); return; }
+  renderSalesList(data || []);
+}
+
+function renderSalesList(sales){
+  const el = document.getElementById('salesList');
+  if(sales.length === 0){
+    el.innerHTML = '<p style="font-size:13px;color:#888;">Nenhuma saída registrada ainda.</p>';
+    return;
+  }
+  el.innerHTML = sales.map(s => {
+    const date = new Date(s.created_at).toLocaleDateString('pt-BR');
+    return `
+    <div class="sale-row">
+      <div class="sale-top">
+        <div class="sale-info">
+          <div class="sale-name">${s.product_name} × ${s.quantity}</div>
+          <div class="sale-sub">${s.client_name ? s.client_name + ' • ' : ''}Conta: ${s.account} • ${date}</div>
+        </div>
+        <button class="icon-btn" onclick="deleteSale('${s.id}')">Excluir</button>
+      </div>
+      <div class="sale-controls">
+        <select onchange="updateSaleStatus('${s.id}', 'delivery_status', this.value)">
+          <option value="Reservado" ${s.delivery_status==='Reservado'?'selected':''}>Reservado</option>
+          <option value="Entregue" ${s.delivery_status==='Entregue'?'selected':''}>Entregue</option>
+        </select>
+        <select onchange="updateSaleStatus('${s.id}', 'payment_status', this.value)">
+          <option value="Pendente" ${s.payment_status==='Pendente'?'selected':''}>Pendente</option>
+          <option value="Pago" ${s.payment_status==='Pago'?'selected':''}>Pago</option>
+        </select>
+      </div>
+    </div>
+  `;
+  }).join('');
+}
+
+async function updateSaleStatus(id, field, value){
+  const { error } = await sb.from('sales').update({ [field]: value }).eq('id', id);
+  if(error){ showToast('Erro ao atualizar status', error.message); console.error(error); return; }
+  showToast('Status atualizado');
+}
+
+async function deleteSale(id){
+  if(!confirm('Excluir esse registro de venda? O estoque já retirado não será devolvido automaticamente.')) return;
+  const { error } = await sb.from('sales').delete().eq('id', id);
+  if(error){ showToast('Erro ao excluir', error.message); return; }
+  showToast('Registro excluído');
+  loadSales();
 }
 
 /* ---------- PASSWORD ---------- */
