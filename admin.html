@@ -297,6 +297,14 @@
       </div>
 
       <div class="card-box">
+        <h2>Cadastro em lote</h2>
+        <p style="font-size:12.5px;color:#777;margin-top:0;">Cadastra vários produtos de uma vez (tipo lançar uma nota inteira). Depois, se precisar adicionar foto, cores ou descrição de algum, edita ele individualmente na lista abaixo.</p>
+        <div id="bulkRows"></div>
+        <button type="button" class="icon-btn" onclick="addBulkRow()">+ Adicionar produto</button>
+        <button class="btn" style="margin-top:12px;" id="saveBulkBtn" onclick="saveBulkProducts()">Salvar todos</button>
+      </div>
+
+      <div class="card-box">
         <h2>Produtos cadastrados</h2>
         <div id="productList">Carregando...</div>
       </div>
@@ -569,6 +577,89 @@ function getColorRowsData(){
     if(name && !isNaN(stock)) result.push({ color: name, stock });
   });
   return result;
+}
+
+/* ---------- BULK PRODUCT ENTRY ---------- */
+function addBulkRow(){
+  const el = document.getElementById('bulkRows');
+  const row = document.createElement('div');
+  row.style.cssText = 'border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;';
+  row.innerHTML = `
+    <input type="text" placeholder="Nome do produto" class="bulk-name" style="margin-bottom:8px;">
+    <select class="bulk-category" style="margin-bottom:8px;">
+      <option value="Moda feminina">Moda feminina</option>
+      <option value="Moda infantil">Moda infantil</option>
+      <option value="Casa, mesa e banho">Casa, mesa e banho</option>
+    </select>
+    <div style="display:flex;gap:8px;">
+      <input type="number" step="0.01" placeholder="Preço (R$)" class="bulk-price" style="margin-bottom:0;">
+      <input type="number" step="1" placeholder="Estoque" class="bulk-stock" style="margin-bottom:0;">
+    </div>
+    <label style="margin-top:8px;">Foto (opcional)</label>
+    <input type="file" accept="image/*" class="bulk-image" style="margin-bottom:0;">
+    <button type="button" class="icon-btn" style="margin-top:8px;" onclick="this.parentElement.remove()">Remover linha</button>
+  `;
+  el.appendChild(row);
+}
+
+async function saveBulkProducts(){
+  const rows = document.querySelectorAll('#bulkRows > div');
+  if(rows.length === 0){ showToast('Adicione pelo menos um produto'); return; }
+
+  const entries = [];
+  for(const row of rows){
+    const name = row.querySelector('.bulk-name').value.trim();
+    const category = row.querySelector('.bulk-category').value;
+    const price = parseFloat(row.querySelector('.bulk-price').value);
+    const stock = parseInt(row.querySelector('.bulk-stock').value, 10);
+    const file = row.querySelector('.bulk-image').files[0] || null;
+    if(!name || isNaN(price) || isNaN(stock)){
+      showToast('Preencha nome, preço e estoque de todos os produtos da lista');
+      return;
+    }
+    entries.push({ name, category, price, stock, file });
+  }
+
+  const btn = document.getElementById('saveBulkBtn');
+  btn.textContent = 'Salvando...';
+  btn.disabled = true;
+
+  const payloads = [];
+  for(const entry of entries){
+    let imageUrl = null;
+    if(entry.file){
+      const ext = entry.file.name.split('.').pop();
+      const fileName = `${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error: uploadError } = await sb.storage.from('product-images').upload(fileName, entry.file);
+      if(uploadError){
+        console.error(uploadError);
+        showToast(`Erro ao enviar foto de "${entry.name}", produto será salvo sem foto`);
+      } else {
+        const { data: urlData } = sb.storage.from('product-images').getPublicUrl(fileName);
+        imageUrl = urlData.publicUrl;
+      }
+    }
+    payloads.push({
+      name: entry.name, category: entry.category, price: entry.price, stock: entry.stock,
+      active: true, subcategory: null, description: null, image_url: imageUrl
+    });
+  }
+
+  const { error } = await sb.from('products').insert(payloads);
+
+  btn.textContent = 'Salvar todos';
+  btn.disabled = false;
+
+  if(error){
+    showToast('Erro ao cadastrar produtos', error.message);
+    console.error(error);
+    return;
+  }
+
+  showToast(`${payloads.length} produto(s) cadastrado(s) com sucesso`);
+  document.getElementById('bulkRows').innerHTML = '';
+  addBulkRow();
+  loadProducts();
 }
 
 /* ---------- PRODUCTS ---------- */
@@ -859,6 +950,15 @@ function removeCartItem(index){
   renderCart();
 }
 
+function moveCartItem(index, direction){
+  const newIndex = index + direction;
+  if(newIndex < 0 || newIndex >= cartItems.length) return;
+  const temp = cartItems[index];
+  cartItems[index] = cartItems[newIndex];
+  cartItems[newIndex] = temp;
+  renderCart();
+}
+
 function renderCart(){
   const box = document.getElementById('cartItemsBox');
   const rows = document.getElementById('cartRows');
@@ -877,8 +977,10 @@ function renderCart(){
     return `
     <div class="cart-row">
       <span style="display:flex;align-items:center;gap:8px;">${thumb}${c.productName}${c.color ? ' ('+c.color+')' : ''} × ${c.quantity}</span>
-      <span style="display:flex;align-items:center;gap:10px;">
+      <span style="display:flex;align-items:center;gap:6px;">
         ${formatMoney(c.unitPrice * c.quantity)}
+        <button type="button" class="icon-btn" onclick="moveCartItem(${i}, -1)" ${i===0?'disabled':''}>↑</button>
+        <button type="button" class="icon-btn" onclick="moveCartItem(${i}, 1)" ${i===cartItems.length-1?'disabled':''}>↓</button>
         <button type="button" class="icon-btn" onclick="removeCartItem(${i})">✕</button>
       </span>
     </div>
@@ -933,12 +1035,13 @@ async function saveSale(){
 
   const saleGroup = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-  const rows = cartItems.map(item => ({
+  const rows = cartItems.map((item, idx) => ({
     product_id: item.productId,
     product_name: item.productName,
     quantity: item.quantity,
     unit_price: item.unitPrice,
     color: item.color,
+    item_order: idx,
     sale_group: saleGroup,
     client_name: clientName,
     account,
@@ -993,6 +1096,11 @@ function editSaleGroup(idsStr){
   const ids = idsStr.split(',');
   const items = allSales.filter(s => ids.includes(s.id));
   if(items.length === 0){ showToast('Venda não encontrada'); return; }
+  items.sort((a, b) => {
+    const oa = a.item_order != null ? a.item_order : 0;
+    const ob = b.item_order != null ? b.item_order : 0;
+    return oa - ob;
+  });
 
   // Restore original stock back into memory so quantity checks in the form make sense
   items.forEach(i => {
@@ -1113,13 +1221,54 @@ function groupSales(sales){
     const key = s.sale_group || s.id; // vendas antigas sem grupo viram grupo de 1 item
     if(!byGroup[key]){
       byGroup[key] = { key, created_at: s.created_at, client_name: s.client_name, account: s.account,
-        delivery_status: s.delivery_status, payment_status: s.payment_status, items: [], ids: [] };
+        delivery_status: s.delivery_status, payment_status: s.payment_status, display_order: s.display_order,
+        items: [], ids: [] };
       groups.push(byGroup[key]);
     }
     byGroup[key].items.push(s);
     byGroup[key].ids.push(s.id);
   });
+  groups.forEach(g => {
+    g.items.sort((a, b) => {
+      const oa = a.item_order != null ? a.item_order : 0;
+      const ob = b.item_order != null ? b.item_order : 0;
+      return oa - ob;
+    });
+  });
+  groups.sort((a, b) => {
+    const aHas = a.display_order != null;
+    const bHas = b.display_order != null;
+    if(aHas && bHas) return a.display_order - b.display_order;
+    if(!aHas && !bHas) return new Date(b.created_at) - new Date(a.created_at);
+    return aHas ? 1 : -1;
+  });
   return groups;
+}
+
+async function moveSaleGroup(idsStr, direction){
+  const payment = document.getElementById('filterPayment').value;
+  const delivery = document.getElementById('filterDelivery').value;
+  if(payment !== 'all' || delivery !== 'all'){
+    showToast('Remova os filtros (deixe em "Todos") antes de reordenar as vendas');
+    return;
+  }
+  const groups = groupSales(allSales);
+  const index = groups.findIndex(g => g.ids.join(',') === idsStr);
+  if(index === -1) return;
+  const newIndex = index + direction;
+  if(newIndex < 0 || newIndex >= groups.length) return;
+
+  const temp = groups[index];
+  groups[index] = groups[newIndex];
+  groups[newIndex] = temp;
+
+  showToast('Salvando nova ordem...');
+  for(let i = 0; i < groups.length; i++){
+    const { error } = await sb.from('sales').update({ display_order: i }).in('id', groups[i].ids);
+    if(error){ console.error(error); showToast('Erro ao salvar ordem', error.message); return; }
+  }
+  showToast('Ordem atualizada');
+  loadSales();
 }
 
 function renderSalesList(sales){
@@ -1143,8 +1292,12 @@ function renderSalesList(sales){
           <div class="sale-items">${itemsHtml}</div>
           <div class="sale-total">Total: ${total != null ? formatMoney(total) : '—'}</div>
         </div>
-        <button class="icon-btn" onclick="editSaleGroup('${g.ids.join(',')}')">Editar</button>
-        <button class="icon-btn" onclick="deleteSaleGroup('${g.ids.join(',')}')">Excluir</button>
+        <div style="display:flex;flex-direction:column;gap:6px;flex:none;">
+          <button class="icon-btn" onclick="moveSaleGroup('${g.ids.join(',')}', -1)">↑</button>
+          <button class="icon-btn" onclick="moveSaleGroup('${g.ids.join(',')}', 1)">↓</button>
+          <button class="icon-btn" onclick="editSaleGroup('${g.ids.join(',')}')">Editar</button>
+          <button class="icon-btn" onclick="deleteSaleGroup('${g.ids.join(',')}')">Excluir</button>
+        </div>
       </div>
       <div class="sale-controls">
         <select onchange="updateSaleStatus('${g.ids.join(',')}', 'delivery_status', this.value)">
@@ -1207,6 +1360,7 @@ async function changePassword(){
 }
 
 toggleSubcategoryField();
+addBulkRow();
 </script>
 </body>
 </html>
