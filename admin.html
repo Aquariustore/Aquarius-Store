@@ -210,6 +210,19 @@
     font-size:15px;
     padding:10px 0;
   }
+  .drag-handle{
+    touch-action:none;
+    cursor:grab;
+    font-size:20px;
+    color:#999;
+    padding:6px 10px;
+    line-height:1;
+    user-select:none;
+  }
+  .sale-row.dragging-row{
+    opacity:0.5;
+    background:#f0f0f0;
+  }
   #toast{
     position:fixed;
     bottom:20px; left:50%; transform:translateX(-50%);
@@ -1284,8 +1297,9 @@ function renderSalesList(sales){
     const total = hasPrices ? g.items.reduce((sum,i)=> sum + Number(i.unit_price) * i.quantity, 0) : null;
     const itemsHtml = g.items.map(i => `<div>${i.product_name}${i.color ? ' ('+i.color+')' : ''} × ${i.quantity}${i.unit_price!=null ? ' — '+formatMoney(i.unit_price*i.quantity) : ''}</div>`).join('');
     return `
-    <div class="sale-row">
+    <div class="sale-row" data-ids="${g.ids.join(',')}">
       <div class="sale-top">
+        <span class="drag-handle">≡</span>
         <div class="sale-info">
           <div class="sale-name">${g.client_name || 'Cliente não informado'}</div>
           <div class="sale-sub">Conta: ${g.account} • ${date}</div>
@@ -1293,8 +1307,6 @@ function renderSalesList(sales){
           <div class="sale-total">Total: ${total != null ? formatMoney(total) : '—'}</div>
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;flex:none;">
-          <button class="icon-btn" onclick="moveSaleGroup('${g.ids.join(',')}', -1)">↑</button>
-          <button class="icon-btn" onclick="moveSaleGroup('${g.ids.join(',')}', 1)">↓</button>
           <button class="icon-btn" onclick="editSaleGroup('${g.ids.join(',')}')">Editar</button>
           <button class="icon-btn" onclick="deleteSaleGroup('${g.ids.join(',')}')">Excluir</button>
         </div>
@@ -1312,6 +1324,68 @@ function renderSalesList(sales){
     </div>
   `;
   }).join('');
+  initSalesDragAndDrop();
+}
+
+function initSalesDragAndDrop(){
+  const container = document.getElementById('salesList');
+  if(!container) return;
+
+  container.querySelectorAll('.drag-handle').forEach(handle => {
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      const draggingEl = handle.closest('.sale-row');
+      if(!draggingEl) return;
+      draggingEl.classList.add('dragging-row');
+      handle.setPointerCapture(e.pointerId);
+
+      const onMove = (ev) => {
+        const y = ev.clientY;
+        const rows = Array.from(container.querySelectorAll('.sale-row')).filter(r => r !== draggingEl);
+        for(const row of rows){
+          const rect = row.getBoundingClientRect();
+          const middle = rect.top + rect.height / 2;
+          if(y < middle && row.previousElementSibling !== draggingEl){
+            container.insertBefore(draggingEl, row);
+            break;
+          } else if(y >= middle && row.nextElementSibling !== draggingEl){
+            container.insertBefore(draggingEl, row.nextElementSibling);
+            break;
+          }
+        }
+      };
+
+      const onUp = async () => {
+        try{ handle.releasePointerCapture(e.pointerId); }catch(err){}
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        draggingEl.classList.remove('dragging-row');
+        await persistSalesDomOrder();
+      };
+
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+    });
+  });
+}
+
+async function persistSalesDomOrder(){
+  const payment = document.getElementById('filterPayment').value;
+  const delivery = document.getElementById('filterDelivery').value;
+  if(payment !== 'all' || delivery !== 'all'){
+    showToast('Remova os filtros (deixe em "Todos") antes de reordenar as vendas');
+    loadSales();
+    return;
+  }
+  const rows = Array.from(document.querySelectorAll('#salesList .sale-row'));
+  const idsList = rows.map(r => r.dataset.ids.split(','));
+  showToast('Salvando nova ordem...');
+  for(let i = 0; i < idsList.length; i++){
+    const { error } = await sb.from('sales').update({ display_order: i }).in('id', idsList[i]);
+    if(error){ console.error(error); showToast('Erro ao salvar ordem', error.message); return; }
+  }
+  showToast('Ordem atualizada');
+  loadSales();
 }
 
 async function updateSaleStatus(idsStr, field, value){
