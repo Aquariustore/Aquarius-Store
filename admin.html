@@ -336,6 +336,14 @@
 
         <div id="cartItemsBox" style="margin-top:14px;display:none;">
           <div id="cartRows"></div>
+          <div class="field" style="margin-top:10px;">
+            <label>Desconto (R$)</label>
+            <input type="number" id="saleDiscount" step="0.01" min="0" placeholder="Ex: 10.00" value="0" oninput="renderCart()">
+          </div>
+          <div class="cart-total-box" style="border-top:1px solid var(--line);padding-top:8px;">
+            <span>Subtotal</span>
+            <span id="cartSubtotalValue">R$ 0,00</span>
+          </div>
           <div class="cart-total-box">
             <span>Total da venda</span>
             <span id="cartTotalValue">R$ 0,00</span>
@@ -1012,6 +1020,7 @@ function renderCart(){
     box.style.display = 'none';
     rows.innerHTML = '';
     document.getElementById('cartTotalValue').textContent = formatMoney(0);
+    if(document.getElementById('cartSubtotalValue')) document.getElementById('cartSubtotalValue').textContent = formatMoney(0);
     return;
   }
   box.style.display = 'block';
@@ -1032,7 +1041,13 @@ function renderCart(){
     </div>
   `;
   }).join('');
-  const total = cartItems.reduce((sum, c) => sum + c.unitPrice * c.quantity, 0);
+  const subtotal = cartItems.reduce((sum, c) => sum + c.unitPrice * c.quantity, 0);
+  const discountInput = document.getElementById('saleDiscount');
+  let discount = parseFloat(discountInput ? discountInput.value : 0);
+  if(isNaN(discount) || discount < 0) discount = 0;
+  if(discount > subtotal) discount = subtotal;
+  const total = subtotal - discount;
+  document.getElementById('cartSubtotalValue').textContent = formatMoney(subtotal);
   document.getElementById('cartTotalValue').textContent = formatMoney(total);
 }
 
@@ -1046,6 +1061,8 @@ async function saveSale(){
   const account = document.getElementById('saleAccount').value;
   const deliveryStatus = document.getElementById('saleDeliveryStatus').value;
   const paymentStatus = document.getElementById('salePaymentStatus').value;
+  let discount = parseFloat(document.getElementById('saleDiscount').value);
+  if(isNaN(discount) || discount < 0) discount = 0;
 
   // double-check stock right before saving
   for(const item of cartItems){
@@ -1068,8 +1085,11 @@ async function saveSale(){
   btn.textContent = 'Salvando...';
   btn.disabled = true;
 
-  // If editing, first delete the old rows and restore their stock
+  // If editing, keep the same sale_group (so payments stay linked) and delete the old rows
+  let saleGroup;
   if(isEditing){
+    const originalItems = allSales.filter(s => editingSaleIds.includes(s.id));
+    saleGroup = (originalItems[0] && originalItems[0].sale_group) || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const { error: delError } = await sb.from('sales').delete().in('id', editingSaleIds);
     if(delError){
       showToast('Erro ao atualizar venda', delError.message);
@@ -1077,9 +1097,9 @@ async function saveSale(){
       btn.disabled = false;
       return;
     }
+  } else {
+    saleGroup = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
   }
-
-  const saleGroup = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
   const rows = cartItems.map((item, idx) => ({
     product_id: item.productId,
@@ -1092,7 +1112,8 @@ async function saveSale(){
     client_name: clientName,
     account,
     delivery_status: deliveryStatus,
-    payment_status: paymentStatus
+    payment_status: paymentStatus,
+    discount: idx === 0 ? discount : 0
   }));
 
   const { error: saleError } = await sb.from('sales').insert(rows);
@@ -1127,6 +1148,7 @@ async function saveSale(){
   btn.textContent = 'Registrar venda';
   btn.disabled = false;
   document.getElementById('saleClient').value = '';
+  document.getElementById('saleDiscount').value = '0';
   cartItems = [];
   editingSaleIds = null;
   document.getElementById('saleFormTitle').textContent = 'Registrar venda';
@@ -1179,10 +1201,12 @@ function editSaleGroup(idsStr){
   });
 
   editingSaleIds = ids;
+  const totalDiscount = items.reduce((s,i)=> s + (Number(i.discount) || 0), 0);
   document.getElementById('saleClient').value = items[0].client_name || '';
   document.getElementById('saleAccount').value = items[0].account;
   document.getElementById('saleDeliveryStatus').value = items[0].delivery_status;
   document.getElementById('salePaymentStatus').value = items[0].payment_status;
+  document.getElementById('saleDiscount').value = totalDiscount;
   document.getElementById('saleFormTitle').textContent = 'Editando venda';
   document.getElementById('saveSaleBtn').textContent = 'Salvar alterações';
   document.getElementById('cancelSaleEditBtn').style.display = 'block';
@@ -1212,6 +1236,7 @@ function cancelSaleEdit(){
   editingSaleIds = null;
   cartItems = [];
   document.getElementById('saleClient').value = '';
+  document.getElementById('saleDiscount').value = '0';
   document.getElementById('saleFormTitle').textContent = 'Registrar venda';
   document.getElementById('saveSaleBtn').textContent = 'Registrar venda';
   document.getElementById('cancelSaleEditBtn').style.display = 'none';
@@ -1220,10 +1245,16 @@ function cancelSaleEdit(){
 }
 
 
+let salePayments = [];
+
 async function loadSales(){
   const { data, error } = await sb.from('sales').select('*').order('created_at', {ascending:false});
   if(error){ showToast('Erro ao carregar vendas', error.message); console.error(error); return; }
   allSales = data || [];
+
+  const { data: paymentsData, error: paymentsError } = await sb.from('sale_payments').select('*');
+  if(!paymentsError) salePayments = paymentsData || [];
+
   applyFilters();
 }
 
@@ -1346,8 +1377,19 @@ function renderSalesList(sales){
   el.innerHTML = groups.map(g => {
     const date = new Date(g.created_at).toLocaleDateString('pt-BR');
     const hasPrices = g.items.every(i => i.unit_price != null);
-    const total = hasPrices ? g.items.reduce((sum,i)=> sum + Number(i.unit_price) * i.quantity, 0) : null;
+    const subtotal = hasPrices ? g.items.reduce((sum,i)=> sum + Number(i.unit_price) * i.quantity, 0) : null;
+    const discount = g.items.reduce((s,i)=> s + (Number(i.discount) || 0), 0);
+    const total = subtotal != null ? subtotal - discount : null;
     const itemsHtml = g.items.map(i => `<div>${i.product_name}${i.color ? ' ('+i.color+')' : ''} × ${i.quantity}${i.unit_price!=null ? ' — '+formatMoney(i.unit_price*i.quantity) : ''}</div>`).join('');
+
+    const groupSaleGroupId = g.items[0].sale_group;
+    const payments = salePayments.filter(p => p.sale_group === groupSaleGroupId);
+    const totalPago = payments.reduce((s,p)=> s + Number(p.amount), 0);
+    const saldoDevedor = total != null ? total - totalPago : null;
+    const paymentsHtml = payments.length > 0
+      ? payments.map(p => `<div style="font-size:11.5px;color:#777;">${new Date(p.payment_date+'T00:00:00').toLocaleDateString('pt-BR')}: ${formatMoney(p.amount)} <button class="icon-btn" style="padding:1px 6px;font-size:10px;" onclick="deleteSalePayment('${p.id}')">✕</button></div>`).join('')
+      : '';
+
     return `
     <div class="sale-row" data-ids="${g.ids.join(',')}">
       <div class="sale-top">
@@ -1355,7 +1397,10 @@ function renderSalesList(sales){
           <div class="sale-name">${g.client_name || 'Cliente não informado'}</div>
           <div class="sale-sub">Conta: ${g.account} • ${date}</div>
           <div class="sale-items">${itemsHtml}</div>
+          ${discount > 0 ? `<div class="sale-sub">Subtotal: ${formatMoney(subtotal)} • Desconto: ${formatMoney(discount)}</div>` : ''}
           <div class="sale-total">Total: ${total != null ? formatMoney(total) : '—'}</div>
+          ${total != null ? `<div class="sale-sub" style="${saldoDevedor<=0 ? 'color:#1a7a1a;' : ''}">Pago: ${formatMoney(totalPago)} • Falta: ${formatMoney(Math.max(saldoDevedor,0))}</div>` : ''}
+          ${paymentsHtml}
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;flex:none;">
           <button class="icon-btn" onclick="moveSaleGroup('${g.ids.join(',')}', -1)">↑</button>
@@ -1364,6 +1409,12 @@ function renderSalesList(sales){
           <button class="icon-btn" onclick="deleteSaleGroup('${g.ids.join(',')}')">Excluir</button>
         </div>
       </div>
+      ${groupSaleGroupId ? `
+      <div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;">
+        <input type="number" step="0.01" placeholder="Valor recebido" id="pay-${groupSaleGroupId}" style="flex:1;min-width:100px;margin-bottom:0;">
+        <button class="icon-btn" onclick="addSalePayment('${groupSaleGroupId}')">+ Pagamento</button>
+      </div>
+      ` : ''}
       <div class="sale-controls">
         <select onchange="updateSaleStatus('${g.ids.join(',')}', 'delivery_status', this.value)">
           <option value="Reservado" ${g.delivery_status==='Reservado'?'selected':''}>Reservado</option>
@@ -1379,6 +1430,32 @@ function renderSalesList(sales){
   }).join('');
 }
 
+async function addSalePayment(saleGroup){
+  const input = document.getElementById(`pay-${saleGroup}`);
+  const amount = parseFloat(input.value);
+  if(isNaN(amount) || amount <= 0){
+    showToast('Informe um valor válido');
+    return;
+  }
+  const { error } = await sb.from('sale_payments').insert({ sale_group: saleGroup, amount });
+  if(error){
+    showToast('Erro ao registrar pagamento', error.message);
+    console.error(error);
+    return;
+  }
+  showToast('Pagamento registrado');
+  input.value = '';
+  loadSales();
+}
+
+async function deleteSalePayment(id){
+  if(!confirm('Excluir esse pagamento?')) return;
+  const { error } = await sb.from('sale_payments').delete().eq('id', id);
+  if(error){ showToast('Erro ao excluir', error.message); return; }
+  showToast('Pagamento excluído');
+  loadSales();
+}
+
 async function updateSaleStatus(idsStr, field, value){
   const ids = idsStr.split(',');
   const { error } = await sb.from('sales').update({ [field]: value }).in('id', ids);
@@ -1389,8 +1466,13 @@ async function updateSaleStatus(idsStr, field, value){
 async function deleteSaleGroup(idsStr){
   if(!confirm('Excluir essa venda? O estoque já retirado não será devolvido automaticamente.')) return;
   const ids = idsStr.split(',');
+  const groupToDelete = allSales.find(s => ids.includes(s.id));
+  const saleGroupId = groupToDelete ? groupToDelete.sale_group : null;
   const { error } = await sb.from('sales').delete().in('id', ids);
   if(error){ showToast('Erro ao excluir', error.message); return; }
+  if(saleGroupId){
+    await sb.from('sale_payments').delete().eq('sale_group', saleGroupId);
+  }
   showToast('Venda excluída');
   loadSales();
 }
