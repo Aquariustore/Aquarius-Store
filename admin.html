@@ -242,6 +242,7 @@
     <div class="section-tabs">
       <div class="section-tab active" id="tabProducts" onclick="showSection('products')">Produtos</div>
       <div class="section-tab" id="tabSales" onclick="showSection('sales')">Vendas</div>
+      <div class="section-tab" id="tabCosts" onclick="showSection('costs')">Custos</div>
       <div class="section-tab" id="tabSettings" onclick="showSection('settings')">Configurações</div>
     </div>
 
@@ -268,6 +269,10 @@
         <div class="field">
           <label>Preço (R$)</label>
           <input type="number" id="pPrice" step="0.01" placeholder="Ex: 129.90">
+        </div>
+        <div class="field">
+          <label>Preço de custo (R$) — opcional</label>
+          <input type="number" id="pCostPrice" step="0.01" placeholder="Ex: 60.00">
         </div>
         <div class="field" style="display:flex;align-items:center;gap:8px;">
           <input type="checkbox" id="pHasColors" onchange="toggleColorMode()" style="width:auto;margin:0;">
@@ -382,6 +387,31 @@
         </div>
         <div id="salesSummary" style="background:var(--sand);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13.5px;"></div>
         <div id="salesList">Carregando...</div>
+      </div>
+    </div>
+
+    <!-- COSTS SECTION (Notas) -->
+    <div id="sectionCosts" style="display:none;">
+      <div class="card-box">
+        <h2>Registrar nota</h2>
+        <div class="field">
+          <label>Data</label>
+          <input type="date" id="notaDate">
+        </div>
+        <div class="field">
+          <label>Valor total da nota (R$)</label>
+          <input type="number" id="notaTotal" step="0.01" placeholder="Ex: 850.00">
+        </div>
+        <div class="field">
+          <label>Quem pagou</label>
+          <input type="text" id="notaPaidBy" placeholder="Ex: Thamirys, Renata, ou nome de quem emprestou">
+        </div>
+        <button class="btn" id="saveNotaBtn" onclick="saveNota()">Registrar nota</button>
+      </div>
+
+      <div class="card-box">
+        <h2>Notas registradas</h2>
+        <div id="notasList">Carregando...</div>
       </div>
     </div>
 
@@ -531,13 +561,21 @@ if(sessionStorage.getItem('aquarius_admin') === 'true'){
 function showSection(section){
   document.getElementById('sectionProducts').style.display = section==='products' ? 'block' : 'none';
   document.getElementById('sectionSales').style.display = section==='sales' ? 'block' : 'none';
+  document.getElementById('sectionCosts').style.display = section==='costs' ? 'block' : 'none';
   document.getElementById('sectionSettings').style.display = section==='settings' ? 'block' : 'none';
   document.getElementById('tabProducts').classList.toggle('active', section==='products');
   document.getElementById('tabSales').classList.toggle('active', section==='sales');
+  document.getElementById('tabCosts').classList.toggle('active', section==='costs');
   document.getElementById('tabSettings').classList.toggle('active', section==='settings');
   if(section === 'sales'){
     populateSaleProductSelect();
     loadSales();
+  }
+  if(section === 'costs'){
+    if(!document.getElementById('notaDate').value){
+      document.getElementById('notaDate').value = new Date().toISOString().slice(0,10);
+    }
+    loadNotas();
   }
 }
 
@@ -751,6 +789,7 @@ function editProduct(id){
     populateSubcategorySelect(p.subcategory || '');
   }
   document.getElementById('pPrice').value = p.price;
+  document.getElementById('pCostPrice').value = p.cost_price != null ? p.cost_price : '';
   document.getElementById('pDescription').value = p.description || '';
   document.getElementById('pExistingImage').value = p.image_url || '';
   document.getElementById('cancelEditBtn').style.display = 'block';
@@ -776,6 +815,7 @@ function resetForm(){
   document.getElementById('pCategory').value = 'Moda feminina';
   toggleSubcategoryField();
   document.getElementById('pPrice').value = '';
+  document.getElementById('pCostPrice').value = '';
   document.getElementById('pDescription').value = '';
   document.getElementById('pStock').value = '';
   document.getElementById('pImage').value = '';
@@ -792,6 +832,8 @@ async function saveProduct(){
   const category = document.getElementById('pCategory').value;
   const subcategory = category === 'Casa, mesa e banho' ? document.getElementById('pSubcategory').value : null;
   const price = parseFloat(document.getElementById('pPrice').value);
+  const costPriceRaw = document.getElementById('pCostPrice').value;
+  const costPrice = costPriceRaw ? parseFloat(costPriceRaw) : null;
   const description = document.getElementById('pDescription').value.trim() || null;
   const hasColors = document.getElementById('pHasColors').checked;
   const colorRows = hasColors ? getColorRowsData() : [];
@@ -830,7 +872,7 @@ async function saveProduct(){
     imageUrl = urlData.publicUrl;
   }
 
-  const payload = { name, category, subcategory, price, stock, image_url: imageUrl, description };
+  const payload = { name, category, subcategory, price, cost_price: costPrice, stock, image_url: imageUrl, description };
 
   let error, productId = id;
   if(id){
@@ -1181,22 +1223,18 @@ async function loadSales(){
   applyFilters();
 }
 
-function applyFilters(){
+async function applyFilters(){
   const payment = document.getElementById('filterPayment').value;
   const delivery = document.getElementById('filterDelivery').value;
   let filtered = allSales;
   if(payment !== 'all') filtered = filtered.filter(s => s.payment_status === payment);
   if(delivery !== 'all') filtered = filtered.filter(s => s.delivery_status === delivery);
-  renderSalesSummary(filtered);
+  await renderSalesSummary(filtered);
   renderSalesList(filtered);
 }
 
-function renderSalesSummary(rows){
+async function renderSalesSummary(rows){
   const el = document.getElementById('salesSummary');
-  if(rows.length === 0){
-    el.innerHTML = '<span style="color:#888;">Nenhuma venda nesse filtro.</span>';
-    return;
-  }
   const groups = groupSales(rows);
   let total = 0;
   const byAccount = {};
@@ -1208,10 +1246,33 @@ function renderSalesSummary(rows){
       byAccount[g.account] = (byAccount[g.account] || 0) + groupTotal;
     }
   });
-  const accountsHtml = Object.keys(byAccount)
-    .map(acc => `<div>Caixa ${acc}: <strong>${formatMoney(byAccount[acc])}</strong></div>`)
-    .join('');
-  el.innerHTML = `<div style="font-size:15px;font-weight:700;margin-bottom:6px;">Total: ${formatMoney(total)}</div>${accountsHtml}`;
+
+  const { data: liqData, error: liqError } = await sb.from('nota_entries').select('*').eq('type', 'liquidacao');
+  const liqByAccount = {};
+  if(!liqError){
+    (liqData || []).forEach(e => {
+      if(e.account) liqByAccount[e.account] = (liqByAccount[e.account] || 0) + Number(e.amount);
+    });
+  }
+
+  if(rows.length === 0 && Object.keys(liqByAccount).length === 0){
+    el.innerHTML = '<span style="color:#888;">Nenhuma venda nesse filtro.</span>';
+    return;
+  }
+
+  const allAccounts = Array.from(new Set([...Object.keys(byAccount), ...Object.keys(liqByAccount)]));
+  let totalLiquido = 0;
+  const accountsHtml = allAccounts.map(acc => {
+    const recebido = byAccount[acc] || 0;
+    const pago = liqByAccount[acc] || 0;
+    const saldo = recebido - pago;
+    totalLiquido += saldo;
+    return `<div style="margin-bottom:4px;"><strong>Caixa ${acc}: ${formatMoney(saldo)}</strong>
+      <div style="font-size:11.5px;color:#777;">Vendas: ${formatMoney(recebido)} • Liquidações pagas: ${formatMoney(pago)}</div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `<div style="font-size:15px;font-weight:700;margin-bottom:6px;">Total líquido: ${formatMoney(totalLiquido)}</div>${accountsHtml}`;
 }
 
 function groupSales(sales){
@@ -1328,6 +1389,152 @@ async function deleteSaleGroup(idsStr){
   if(error){ showToast('Erro ao excluir', error.message); return; }
   showToast('Venda excluída');
   loadSales();
+}
+
+/* ---------- NOTAS (custos) ---------- */
+let notas = [];
+let notaEntries = [];
+
+async function loadNotas(){
+  const el = document.getElementById('notasList');
+  const { data: notasData, error: notasError } = await sb.from('notas').select('*').order('nota_date', {ascending:false});
+  const { data: entriesData, error: entriesError } = await sb.from('nota_entries').select('*');
+  if(notasError || entriesError){
+    el.innerHTML = '<span style="color:#888;">Erro ao carregar notas.</span>';
+    console.error(notasError || entriesError);
+    return;
+  }
+  notas = notasData || [];
+  notaEntries = entriesData || [];
+  renderNotasList();
+}
+
+function renderNotasList(){
+  const el = document.getElementById('notasList');
+  if(notas.length === 0){
+    el.innerHTML = '<p style="font-size:13px;color:#888;">Nenhuma nota registrada ainda.</p>';
+    return;
+  }
+  el.innerHTML = notas.map(n => {
+    const entries = notaEntries.filter(e => e.nota_id === n.id);
+    const liquidacoes = entries.filter(e=>e.type==='liquidacao');
+    const liquidado = liquidacoes.reduce((s,e)=>s+Number(e.amount),0);
+    const liquidadoThamirys = liquidacoes.filter(e=>e.account==='Thamirys').reduce((s,e)=>s+Number(e.amount),0);
+    const liquidadoRenata = liquidacoes.filter(e=>e.account==='Renata').reduce((s,e)=>s+Number(e.amount),0);
+    const consumoT = entries.filter(e=>e.type==='consumo_thamirys').reduce((s,e)=>s+Number(e.amount),0);
+    const consumoR = entries.filter(e=>e.type==='consumo_renata').reduce((s,e)=>s+Number(e.amount),0);
+    const saldo = Number(n.total_amount) - liquidado - consumoT - consumoR;
+    const dateStr = new Date(n.nota_date + 'T00:00:00').toLocaleDateString('pt-BR');
+    return `
+    <div class="card-box" style="margin-bottom:14px;">
+      <div class="sale-top">
+        <div class="sale-info">
+          <div class="sale-name">Nota de ${dateStr}</div>
+          <div class="sale-sub">Pago por: ${n.paid_by || '-'} • Valor total: ${formatMoney(n.total_amount)}</div>
+          <div class="sale-total" style="${saldo<=0 ? 'color:#1a7a1a;' : ''}">Saldo a liquidar: ${formatMoney(saldo)}</div>
+          <div style="font-size:12px;color:#777;margin-top:4px;">
+            Liquidado por Thamirys: ${formatMoney(liquidadoThamirys)} • Liquidado por Renata: ${formatMoney(liquidadoRenata)}<br>
+            Consumo Thamirys: ${formatMoney(consumoT)} • Consumo Renata: ${formatMoney(consumoR)}
+          </div>
+        </div>
+        <button class="icon-btn" onclick="deleteNota('${n.id}')">Excluir nota</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+        <input type="number" step="0.01" placeholder="Valor liquidado" id="liq-${n.id}" style="flex:1;min-width:100px;margin-bottom:0;">
+        <select id="liq-account-${n.id}" style="width:auto;margin-bottom:0;">
+          <option value="Thamirys">Thamirys</option>
+          <option value="Renata">Renata</option>
+        </select>
+        <button class="icon-btn" onclick="addLiquidacao('${n.id}')">+ Liquidar</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <input type="number" step="0.01" placeholder="Consumo Thamirys" id="ct-${n.id}" style="flex:1;min-width:100px;margin-bottom:0;">
+        <button class="icon-btn" onclick="addNotaEntry('${n.id}', 'consumo_thamirys', 'ct-${n.id}')">+ Add</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <input type="number" step="0.01" placeholder="Consumo Renata" id="cr-${n.id}" style="flex:1;min-width:100px;margin-bottom:0;">
+        <button class="icon-btn" onclick="addNotaEntry('${n.id}', 'consumo_renata', 'cr-${n.id}')">+ Add</button>
+      </div>
+    </div>
+  `;
+  }).join('');
+}
+
+async function saveNota(){
+  const date = document.getElementById('notaDate').value || new Date().toISOString().slice(0,10);
+  const total = parseFloat(document.getElementById('notaTotal').value);
+  const paidBy = document.getElementById('notaPaidBy').value.trim();
+
+  if(isNaN(total)){
+    showToast('Informe o valor total da nota');
+    return;
+  }
+
+  const btn = document.getElementById('saveNotaBtn');
+  btn.textContent = 'Salvando...';
+  btn.disabled = true;
+
+  const { error } = await sb.from('notas').insert({ total_amount: total, paid_by: paidBy || null, nota_date: date });
+
+  btn.textContent = 'Registrar nota';
+  btn.disabled = false;
+
+  if(error){
+    showToast('Erro ao registrar nota', error.message);
+    console.error(error);
+    return;
+  }
+
+  showToast('Nota registrada com sucesso');
+  document.getElementById('notaTotal').value = '';
+  document.getElementById('notaPaidBy').value = '';
+  loadNotas();
+}
+
+async function addLiquidacao(notaId){
+  const input = document.getElementById(`liq-${notaId}`);
+  const accountSelect = document.getElementById(`liq-account-${notaId}`);
+  const amount = parseFloat(input.value);
+  const account = accountSelect.value;
+  if(isNaN(amount) || amount <= 0){
+    showToast('Informe um valor válido');
+    return;
+  }
+  const { error } = await sb.from('nota_entries').insert({ nota_id: notaId, type: 'liquidacao', amount, account });
+  if(error){
+    showToast('Erro ao adicionar', error.message);
+    console.error(error);
+    return;
+  }
+  showToast('Liquidação adicionada');
+  input.value = '';
+  loadNotas();
+}
+
+async function addNotaEntry(notaId, type, inputId){
+  const input = document.getElementById(inputId);
+  const amount = parseFloat(input.value);
+  if(isNaN(amount) || amount <= 0){
+    showToast('Informe um valor válido');
+    return;
+  }
+  const { error } = await sb.from('nota_entries').insert({ nota_id: notaId, type, amount });
+  if(error){
+    showToast('Erro ao adicionar', error.message);
+    console.error(error);
+    return;
+  }
+  showToast('Adicionado com sucesso');
+  input.value = '';
+  loadNotas();
+}
+
+async function deleteNota(id){
+  if(!confirm('Excluir essa nota e todos os lançamentos dela? Essa ação não pode ser desfeita.')) return;
+  const { error } = await sb.from('notas').delete().eq('id', id);
+  if(error){ showToast('Erro ao excluir', error.message); return; }
+  showToast('Nota excluída');
+  loadNotas();
 }
 
 /* ---------- PASSWORD ---------- */
