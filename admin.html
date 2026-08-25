@@ -403,6 +403,10 @@
           <input type="number" id="notaTotal" step="0.01" placeholder="Ex: 850.00">
         </div>
         <div class="field">
+          <label>Loja / Fornecedor</label>
+          <input type="text" id="notaStoreName" placeholder="Ex: Nome da loja onde comprou">
+        </div>
+        <div class="field">
           <label>Quem pagou</label>
           <input type="text" id="notaPaidBy" placeholder="Ex: Thamirys, Renata, ou nome de quem emprestou">
         </div>
@@ -1423,18 +1427,19 @@ function renderNotasList(){
     const liquidadoRenata = liquidacoes.filter(e=>e.account==='Renata').reduce((s,e)=>s+Number(e.amount),0);
     const consumoT = entries.filter(e=>e.type==='consumo_thamirys').reduce((s,e)=>s+Number(e.amount),0);
     const consumoR = entries.filter(e=>e.type==='consumo_renata').reduce((s,e)=>s+Number(e.amount),0);
-    const saldo = Number(n.total_amount) - liquidado - consumoT - consumoR;
+    const consumoC = entries.filter(e=>e.type==='consumo_ceia').reduce((s,e)=>s+Number(e.amount),0);
+    const saldo = Number(n.total_amount) - liquidado - consumoT - consumoR - consumoC;
     const dateStr = new Date(n.nota_date + 'T00:00:00').toLocaleDateString('pt-BR');
     return `
     <div class="card-box" style="margin-bottom:14px;">
       <div class="sale-top">
         <div class="sale-info">
-          <div class="sale-name">Nota de ${dateStr}</div>
-          <div class="sale-sub">Pago por: ${n.paid_by || '-'} • Valor total: ${formatMoney(n.total_amount)}</div>
+          <div class="sale-name">${n.store_name ? n.store_name : 'Nota de ' + dateStr}</div>
+          <div class="sale-sub">${n.store_name ? dateStr + ' • ' : ''}Pago por: ${n.paid_by || '-'} • Valor total: ${formatMoney(n.total_amount)}</div>
           <div class="sale-total" style="${saldo<=0 ? 'color:#1a7a1a;' : ''}">Saldo a liquidar: ${formatMoney(saldo)}</div>
           <div style="font-size:12px;color:#777;margin-top:4px;">
             Liquidado por Thamirys: ${formatMoney(liquidadoThamirys)} • Liquidado por Renata: ${formatMoney(liquidadoRenata)}<br>
-            Consumo Thamirys: ${formatMoney(consumoT)} • Consumo Renata: ${formatMoney(consumoR)}
+            Consumo Thamirys: ${formatMoney(consumoT)} • Consumo Renata: ${formatMoney(consumoR)} • Consumo Ceia: ${formatMoney(consumoC)}
           </div>
         </div>
         <button class="icon-btn" onclick="deleteNota('${n.id}')">Excluir nota</button>
@@ -1455,6 +1460,10 @@ function renderNotasList(){
         <input type="number" step="0.01" placeholder="Consumo Renata" id="cr-${n.id}" style="flex:1;min-width:100px;margin-bottom:0;">
         <button class="icon-btn" onclick="addNotaEntry('${n.id}', 'consumo_renata', 'cr-${n.id}')">+ Add</button>
       </div>
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <input type="number" step="0.01" placeholder="Consumo Ceia" id="cc-${n.id}" style="flex:1;min-width:100px;margin-bottom:0;">
+        <button class="icon-btn" onclick="addNotaEntry('${n.id}', 'consumo_ceia', 'cc-${n.id}')">+ Add</button>
+      </div>
     </div>
   `;
   }).join('');
@@ -1464,6 +1473,7 @@ async function saveNota(){
   const date = document.getElementById('notaDate').value || new Date().toISOString().slice(0,10);
   const total = parseFloat(document.getElementById('notaTotal').value);
   const paidBy = document.getElementById('notaPaidBy').value.trim();
+  const storeName = document.getElementById('notaStoreName').value.trim();
 
   if(isNaN(total)){
     showToast('Informe o valor total da nota');
@@ -1474,7 +1484,7 @@ async function saveNota(){
   btn.textContent = 'Salvando...';
   btn.disabled = true;
 
-  const { error } = await sb.from('notas').insert({ total_amount: total, paid_by: paidBy || null, nota_date: date });
+  const { error } = await sb.from('notas').insert({ total_amount: total, paid_by: paidBy || null, nota_date: date, store_name: storeName || null });
 
   btn.textContent = 'Registrar nota';
   btn.disabled = false;
@@ -1488,6 +1498,7 @@ async function saveNota(){
   showToast('Nota registrada com sucesso');
   document.getElementById('notaTotal').value = '';
   document.getElementById('notaPaidBy').value = '';
+  document.getElementById('notaStoreName').value = '';
   loadNotas();
 }
 
