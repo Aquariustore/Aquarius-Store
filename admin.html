@@ -270,10 +270,6 @@
           <label>Preço (R$)</label>
           <input type="number" id="pPrice" step="0.01" placeholder="Ex: 129.90">
         </div>
-        <div class="field">
-          <label>Preço de custo (R$) — opcional</label>
-          <input type="number" id="pCostPrice" step="0.01" placeholder="Ex: 60.00">
-        </div>
         <div class="field" style="display:flex;align-items:center;gap:8px;">
           <input type="checkbox" id="pHasColors" onchange="toggleColorMode()" style="width:auto;margin:0;">
           <label style="margin:0;">Esse produto tem cores diferentes?</label>
@@ -801,7 +797,6 @@ function editProduct(id){
     populateSubcategorySelect(p.subcategory || '');
   }
   document.getElementById('pPrice').value = p.price;
-  document.getElementById('pCostPrice').value = p.cost_price != null ? p.cost_price : '';
   document.getElementById('pDescription').value = p.description || '';
   document.getElementById('pExistingImage').value = p.image_url || '';
   document.getElementById('cancelEditBtn').style.display = 'block';
@@ -827,7 +822,6 @@ function resetForm(){
   document.getElementById('pCategory').value = 'Moda feminina';
   toggleSubcategoryField();
   document.getElementById('pPrice').value = '';
-  document.getElementById('pCostPrice').value = '';
   document.getElementById('pDescription').value = '';
   document.getElementById('pStock').value = '';
   document.getElementById('pImage').value = '';
@@ -844,8 +838,6 @@ async function saveProduct(){
   const category = document.getElementById('pCategory').value;
   const subcategory = category === 'Casa, mesa e banho' ? document.getElementById('pSubcategory').value : null;
   const price = parseFloat(document.getElementById('pPrice').value);
-  const costPriceRaw = document.getElementById('pCostPrice').value;
-  const costPrice = costPriceRaw ? parseFloat(costPriceRaw) : null;
   const description = document.getElementById('pDescription').value.trim() || null;
   const hasColors = document.getElementById('pHasColors').checked;
   const colorRows = hasColors ? getColorRowsData() : [];
@@ -884,7 +876,7 @@ async function saveProduct(){
     imageUrl = urlData.publicUrl;
   }
 
-  const payload = { name, category, subcategory, price, cost_price: costPrice, stock, image_url: imageUrl, description };
+  const payload = { name, category, subcategory, price, stock, image_url: imageUrl, description };
 
   let error, productId = id;
   if(id){
