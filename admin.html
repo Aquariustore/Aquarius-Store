@@ -316,6 +316,10 @@
       <div class="card-box">
         <h2 id="saleFormTitle">Registrar venda</h2>
         <div class="field">
+          <label>Buscar produto</label>
+          <input type="text" id="saleProductSearch" placeholder="Ex: aroma banheiro" oninput="populateSaleProductSelect()">
+        </div>
+        <div class="field">
           <label>Produto</label>
           <select id="saleProduct" onchange="onSaleProductChange()"></select>
         </div>
@@ -377,6 +381,10 @@
 
       <div class="card-box">
         <h2>Histórico de vendas</h2>
+        <div class="field" style="margin-bottom:10px;">
+          <label>Buscar por cliente</label>
+          <input type="text" id="filterClient" placeholder="Ex: Fernanda" oninput="applyFilters()">
+        </div>
         <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
           <select id="filterPayment" onchange="applyFilters()" style="width:auto;margin-bottom:0;">
             <option value="all">Pagamento: Todos</option>
@@ -388,6 +396,13 @@
             <option value="Entregue">Entregue</option>
             <option value="Reservado">Reservado</option>
           </select>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
+          <select id="summaryMode" onchange="onSummaryModeChange()" style="width:auto;margin-bottom:0;">
+            <option value="all">Total: Geral</option>
+            <option value="month">Total: Mensal</option>
+          </select>
+          <input type="month" id="summaryMonth" style="display:none;width:auto;margin-bottom:0;" onchange="applyFilters()">
         </div>
         <div id="salesSummary" style="background:var(--sand);border-radius:10px;padding:12px;margin-bottom:14px;font-size:13.5px;"></div>
         <div id="salesList">Carregando...</div>
@@ -710,7 +725,7 @@ async function saveBulkProducts(){
 
 /* ---------- PRODUCTS ---------- */
 async function loadProducts(){
-  const { data, error } = await sb.from('products').select('*').order('created_at', {ascending:false});
+  const { data, error } = await sb.from('products').select('*').order('name', {ascending:true});
   if(error){ showToast('Erro ao carregar produtos'); console.error(error); return; }
   products = data || [];
 
@@ -918,11 +933,19 @@ async function saveProduct(){
 function populateSaleProductSelect(){
   const select = document.getElementById('saleProduct');
   const current = select.value;
-  select.innerHTML = products
-    .filter(p => p.active)
+  const searchBox = document.getElementById('saleProductSearch');
+  const query = searchBox ? searchBox.value.trim() : '';
+
+  let list = products.filter(p => p.active);
+  if(query) list = list.filter(p => matchesAllWords(p.name, query));
+  list = list.slice().sort((a,b) => a.name.localeCompare(b.name, 'pt-BR'));
+
+  select.innerHTML = list
     .map(p => `<option value="${p.id}">${p.name} — ${formatMoney(p.price)}</option>`)
     .join('');
-  if(current) select.value = current;
+
+  // mantém o produto selecionado se ele ainda estiver na lista filtrada
+  if(current && list.some(p => p.id === current)) select.value = current;
   onSaleProductChange();
 }
 
@@ -1250,14 +1273,49 @@ async function loadSales(){
   applyFilters();
 }
 
+function onSummaryModeChange(){
+  const mode = document.getElementById('summaryMode').value;
+  const monthInput = document.getElementById('summaryMonth');
+  if(mode === 'month'){
+    monthInput.style.display = 'block';
+    if(!monthInput.value) monthInput.value = new Date().toISOString().slice(0,7);
+  } else {
+    monthInput.style.display = 'none';
+  }
+  applyFilters();
+}
+
 async function applyFilters(){
   const payment = document.getElementById('filterPayment').value;
   const delivery = document.getElementById('filterDelivery').value;
+  const clientQuery = normalizeSearchText(document.getElementById('filterClient').value.trim());
   let filtered = allSales;
   if(payment !== 'all') filtered = filtered.filter(s => s.payment_status === payment);
   if(delivery !== 'all') filtered = filtered.filter(s => s.delivery_status === delivery);
-  await renderSalesSummary(filtered);
+  if(clientQuery) filtered = filtered.filter(s => normalizeSearchText(s.client_name || '').includes(clientQuery));
+
+  // o filtro de mês só afeta o resumo de totais, não a lista de vendas exibida
+  const summaryMode = document.getElementById('summaryMode').value;
+  let summaryRows = filtered;
+  if(summaryMode === 'month'){
+    const month = document.getElementById('summaryMonth').value; // formato YYYY-MM
+    if(month) summaryRows = filtered.filter(s => (s.created_at || '').slice(0,7) === month);
+  }
+
+  await renderSalesSummary(summaryRows);
   renderSalesList(filtered);
+}
+
+// remove acentos e deixa minúsculo, pra facilitar busca
+function normalizeSearchText(text){
+  return (text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+// true se TODAS as palavras do termo buscado aparecem no texto, em qualquer ordem
+function matchesAllWords(text, query){
+  const normText = normalizeSearchText(text);
+  const words = normalizeSearchText(query).split(/\s+/).filter(Boolean);
+  return words.every(w => normText.includes(w));
 }
 
 async function renderSalesSummary(rows){
@@ -1265,6 +1323,7 @@ async function renderSalesSummary(rows){
   const groups = groupSales(rows);
   let total = 0;
   const byAccount = {};
+  const byProduct = {}; // nome do produto -> quantidade vendida
   groups.forEach(g => {
     const hasPrices = g.items.every(i => i.unit_price != null);
     if(hasPrices){
@@ -1272,6 +1331,10 @@ async function renderSalesSummary(rows){
       total += groupTotal;
       byAccount[g.account] = (byAccount[g.account] || 0) + groupTotal;
     }
+    g.items.forEach(i => {
+      const key = i.product_name || 'Produto removido';
+      byProduct[key] = (byProduct[key] || 0) + i.quantity;
+    });
   });
 
   const { data: liqData, error: liqError } = await sb.from('nota_entries').select('*').eq('type', 'liquidacao');
@@ -1299,7 +1362,18 @@ async function renderSalesSummary(rows){
     </div>`;
   }).join('');
 
-  el.innerHTML = `<div style="font-size:15px;font-weight:700;margin-bottom:6px;">Total líquido: ${formatMoney(totalLiquido)}</div>${accountsHtml}`;
+  // top 5 produtos mais vendidos (por quantidade) no período filtrado
+  const topProducts = Object.entries(byProduct)
+    .sort((a,b) => b[1] - a[1])
+    .slice(0, 5);
+  const topProductsHtml = topProducts.length > 0
+    ? `<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.08);">
+        <div style="font-weight:700;margin-bottom:4px;">Mais vendidos</div>
+        ${topProducts.map(([name, qty], idx) => `<div style="font-size:12.5px;color:#555;">${idx+1}. ${name} — ${qty} un.</div>`).join('')}
+      </div>`
+    : '';
+
+  el.innerHTML = `<div style="font-size:15px;font-weight:700;margin-bottom:6px;">Total líquido: ${formatMoney(totalLiquido)}</div>${accountsHtml}${topProductsHtml}`;
 }
 
 function groupSales(sales){
@@ -1452,7 +1526,26 @@ async function updateSaleStatus(idsStr, field, value){
   const ids = idsStr.split(',');
   const { error } = await sb.from('sales').update({ [field]: value }).in('id', ids);
   if(error){ showToast('Erro ao atualizar status', error.message); console.error(error); return; }
+
+  // se marcou como Pago, lança automaticamente um pagamento cobrindo o que faltava
+  if(field === 'payment_status' && value === 'Pago'){
+    const groupRows = allSales.filter(s => ids.includes(s.id));
+    const saleGroupId = groupRows[0] ? groupRows[0].sale_group : null;
+    const hasPrices = groupRows.every(i => i.unit_price != null);
+    if(saleGroupId && hasPrices){
+      const subtotal = groupRows.reduce((s,i)=> s + Number(i.unit_price) * i.quantity, 0);
+      const discount = groupRows.reduce((s,i)=> s + (Number(i.discount) || 0), 0);
+      const total = subtotal - discount;
+      const jaPago = salePayments.filter(p => p.sale_group === saleGroupId).reduce((s,p)=> s + Number(p.amount), 0);
+      const falta = total - jaPago;
+      if(falta > 0.009){
+        await sb.from('sale_payments').insert({ sale_group: saleGroupId, amount: falta });
+      }
+    }
+  }
+
   showToast('Status atualizado');
+  loadSales();
 }
 
 async function deleteSaleGroup(idsStr){
@@ -1493,7 +1586,9 @@ function renderNotasList(){
     el.innerHTML = '<p style="font-size:13px;color:#888;">Nenhuma nota registrada ainda.</p>';
     return;
   }
-  el.innerHTML = notas.map(n => {
+
+  // monta o card de cada nota (mesmo html de antes)
+  function notaCardHtml(n){
     const entries = notaEntries.filter(e => e.nota_id === n.id);
     const liquidacoes = entries.filter(e=>e.type==='liquidacao');
     const liquidado = liquidacoes.reduce((s,e)=>s+Number(e.amount),0);
@@ -1539,6 +1634,42 @@ function renderNotasList(){
         <button class="icon-btn" onclick="addNotaEntry('${n.id}', 'consumo_ceia', 'cc-${n.id}')">+ Add</button>
       </div>
     </div>
+  `;
+  }
+
+  // calcula o saldo de uma nota (pra saber se o mês já tá tudo pago)
+  function notaSaldo(n){
+    const entries = notaEntries.filter(e => e.nota_id === n.id);
+    const liquidado = entries.filter(e=>e.type==='liquidacao').reduce((s,e)=>s+Number(e.amount),0);
+    const consumo = entries.filter(e=>e.type.startsWith('consumo_')).reduce((s,e)=>s+Number(e.amount),0);
+    return Number(n.total_amount) - liquidado - consumo;
+  }
+
+  // agrupa por mês (YYYY-MM), mais recente primeiro
+  const monthNames = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  const byMonth = {};
+  notas.forEach(n => {
+    const key = n.nota_date.slice(0,7); // YYYY-MM
+    if(!byMonth[key]) byMonth[key] = [];
+    byMonth[key].push(n);
+  });
+  const monthKeys = Object.keys(byMonth).sort((a,b) => b.localeCompare(a));
+
+  el.innerHTML = monthKeys.map(key => {
+    const [year, month] = key.split('-');
+    const label = `${monthNames[parseInt(month,10)-1]} de ${year}`;
+    const monthNotas = byMonth[key];
+    const monthSaldo = monthNotas.reduce((s,n) => s + notaSaldo(n), 0);
+    const pendente = monthSaldo > 0.009; // tolerância de arredondamento
+    const cardsHtml = monthNotas.map(notaCardHtml).join('');
+    return `
+    <details ${pendente ? 'open' : ''} style="margin-bottom:14px;">
+      <summary style="cursor:pointer;font-weight:700;font-size:14.5px;padding:10px 4px;display:flex;justify-content:space-between;align-items:center;list-style:none;">
+        <span>${label}</span>
+        <span style="font-weight:500;font-size:12.5px;${pendente ? 'color:#b3401f;' : 'color:#1a7a1a;'}">${pendente ? 'Falta pagar: ' + formatMoney(monthSaldo) : 'Tudo pago ✓'}</span>
+      </summary>
+      <div style="margin-top:8px;">${cardsHtml}</div>
+    </details>
   `;
   }).join('');
 }
