@@ -375,6 +375,14 @@
             <option value="Pago">Pago</option>
           </select>
         </div>
+        <div class="field">
+          <label>Localização</label>
+          <input type="text" id="saleLocation" placeholder="Ex: Garopaba, Ibiraquera...">
+        </div>
+        <div class="field">
+          <label>Data combinada de entrega</label>
+          <input type="date" id="saleDeliveryDate">
+        </div>
         <button class="btn" id="saveSaleBtn" onclick="saveSale()">Registrar venda</button>
         <button class="btn secondary" id="cancelSaleEditBtn" style="display:none;margin-top:8px;" onclick="cancelSaleEdit()">Cancelar edição</button>
       </div>
@@ -1076,6 +1084,8 @@ async function saveSale(){
   const account = document.getElementById('saleAccount').value;
   const deliveryStatus = document.getElementById('saleDeliveryStatus').value;
   const paymentStatus = document.getElementById('salePaymentStatus').value;
+  const location = document.getElementById('saleLocation').value.trim() || null;
+  const deliveryDate = document.getElementById('saleDeliveryDate').value || null;
   let discount = parseFloat(document.getElementById('saleDiscount').value);
   if(isNaN(discount) || discount < 0) discount = 0;
 
@@ -1128,6 +1138,8 @@ async function saveSale(){
     account,
     delivery_status: deliveryStatus,
     payment_status: paymentStatus,
+    location: location,
+    delivery_date: deliveryDate,
     discount: idx === 0 ? discount : 0
   }));
 
@@ -1164,6 +1176,8 @@ async function saveSale(){
   btn.disabled = false;
   document.getElementById('saleClient').value = '';
   document.getElementById('saleDiscount').value = '0';
+  document.getElementById('saleLocation').value = '';
+  document.getElementById('saleDeliveryDate').value = '';
   cartItems = [];
   editingSaleIds = null;
   document.getElementById('saleFormTitle').textContent = 'Registrar venda';
@@ -1221,6 +1235,8 @@ function editSaleGroup(idsStr){
   document.getElementById('saleAccount').value = items[0].account;
   document.getElementById('saleDeliveryStatus').value = items[0].delivery_status;
   document.getElementById('salePaymentStatus').value = items[0].payment_status;
+  document.getElementById('saleLocation').value = items[0].location || '';
+  document.getElementById('saleDeliveryDate').value = items[0].delivery_date || '';
   document.getElementById('saleDiscount').value = totalDiscount;
   document.getElementById('saleFormTitle').textContent = 'Editando venda';
   document.getElementById('saveSaleBtn').textContent = 'Salvar alterações';
@@ -1252,6 +1268,8 @@ function cancelSaleEdit(){
   cartItems = [];
   document.getElementById('saleClient').value = '';
   document.getElementById('saleDiscount').value = '0';
+  document.getElementById('saleLocation').value = '';
+  document.getElementById('saleDeliveryDate').value = '';
   document.getElementById('saleFormTitle').textContent = 'Registrar venda';
   document.getElementById('saveSaleBtn').textContent = 'Registrar venda';
   document.getElementById('cancelSaleEditBtn').style.display = 'none';
@@ -1384,7 +1402,7 @@ function groupSales(sales){
     if(!byGroup[key]){
       byGroup[key] = { key, created_at: s.created_at, client_name: s.client_name, account: s.account,
         delivery_status: s.delivery_status, payment_status: s.payment_status, display_order: s.display_order,
-        items: [], ids: [] };
+        location: s.location, delivery_date: s.delivery_date, items: [], ids: [] };
       groups.push(byGroup[key]);
     }
     byGroup[key].items.push(s);
@@ -1456,6 +1474,14 @@ function renderSalesList(sales){
       ? payments.map(p => `<div style="font-size:11.5px;color:#777;">${new Date(p.payment_date+'T00:00:00').toLocaleDateString('pt-BR')}: ${formatMoney(p.amount)} <button class="icon-btn" style="padding:1px 6px;font-size:10px;" onclick="deleteSalePayment('${p.id}')">✕</button></div>`).join('')
       : '';
 
+    let deliveryDateHtml = '';
+    if(g.delivery_date && g.delivery_status !== 'Entregue'){
+      const todayStr = new Date().toISOString().slice(0,10);
+      const isLate = g.delivery_date < todayStr;
+      const dateLabel = new Date(g.delivery_date + 'T00:00:00').toLocaleDateString('pt-BR');
+      deliveryDateHtml = `<div class="sale-sub" style="${isLate ? 'color:#b3401f;font-weight:700;' : ''}">Entrega combinada: ${dateLabel}${isLate ? ' (atrasado)' : ''}</div>`;
+    }
+
     return `
     <div class="sale-row" data-ids="${g.ids.join(',')}">
       <div class="sale-top">
@@ -1466,6 +1492,7 @@ function renderSalesList(sales){
           ${discount > 0 ? `<div class="sale-sub">Subtotal: ${formatMoney(subtotal)} • Desconto: ${formatMoney(discount)}</div>` : ''}
           <div class="sale-total">Total: ${total != null ? formatMoney(total) : '—'}</div>
           ${total != null ? `<div class="sale-sub" style="${saldoDevedor<=0 ? 'color:#1a7a1a;' : ''}">Pago: ${formatMoney(totalPago)} • Falta: ${formatMoney(Math.max(saldoDevedor,0))}</div>` : ''}
+          ${deliveryDateHtml}
           ${paymentsHtml}
         </div>
         <div style="display:flex;flex-direction:column;gap:6px;flex:none;">
@@ -1490,6 +1517,8 @@ function renderSalesList(sales){
           <option value="Pendente" ${g.payment_status==='Pendente'?'selected':''}>Pendente</option>
           <option value="Pago" ${g.payment_status==='Pago'?'selected':''}>Pago</option>
         </select>
+        <input type="text" placeholder="Localização" value="${g.location ? g.location.replace(/"/g,'&quot;') : ''}" style="width:auto;margin-bottom:0;flex:1;min-width:110px;" onchange="updateSaleStatus('${g.ids.join(',')}', 'location', this.value)">
+        <input type="date" value="${g.delivery_date || ''}" style="width:auto;margin-bottom:0;" onchange="updateSaleStatus('${g.ids.join(',')}', 'delivery_date', this.value)">
       </div>
     </div>
   `;
@@ -1524,6 +1553,7 @@ async function deleteSalePayment(id){
 
 async function updateSaleStatus(idsStr, field, value){
   const ids = idsStr.split(',');
+  if(field === 'delivery_date' && value === '') value = null;
   const { error } = await sb.from('sales').update({ [field]: value }).in('id', ids);
   if(error){ showToast('Erro ao atualizar status', error.message); console.error(error); return; }
 
