@@ -307,6 +307,10 @@
 
       <div class="card-box">
         <h2>Produtos cadastrados</h2>
+        <div class="field" style="margin-bottom:10px;">
+          <label>Buscar produto</label>
+          <input type="text" id="productListSearch" placeholder="Ex: aroma banheiro" oninput="renderProductList()">
+        </div>
         <div id="productList">Carregando...</div>
       </div>
     </div>
@@ -438,6 +442,11 @@
           <input type="text" id="notaPaidBy" placeholder="Ex: Thamirys, Renata, ou nome de quem emprestou">
         </div>
         <button class="btn" id="saveNotaBtn" onclick="saveNota()">Registrar nota</button>
+      </div>
+
+      <div class="card-box">
+        <h2>Consumo próprio</h2>
+        <div id="consumoSummary" style="background:var(--sand);border-radius:10px;padding:12px;font-size:13.5px;"></div>
       </div>
 
       <div class="card-box">
@@ -749,11 +758,19 @@ async function loadProducts(){
 
 function renderProductList(){
   const el = document.getElementById('productList');
+  const searchBox = document.getElementById('productListSearch');
+  const query = searchBox ? searchBox.value.trim() : '';
+  const list = query ? products.filter(p => matchesAllWords(p.name, query)) : products;
+
   if(products.length === 0){
     el.innerHTML = '<p style="font-size:13px;color:#888;">Nenhum produto cadastrado ainda.</p>';
     return;
   }
-  el.innerHTML = products.map(p => {
+  if(list.length === 0){
+    el.innerHTML = '<p style="font-size:13px;color:#888;">Nenhum produto encontrado.</p>';
+    return;
+  }
+  el.innerHTML = list.map(p => {
     const hasVariants = p.variants && p.variants.length > 0;
     const stockControl = hasVariants
       ? `<div style="font-size:11px;color:#555;text-align:right;">${p.variants.map(v => `${v.color}: <input type="number" style="width:40px;padding:2px;text-align:center;border-radius:4px;border:1px solid var(--line);margin:0 2px;" value="${v.stock}" onchange="updateVariantStock('${v.id}', this.value)">`).join('<br>')}</div>`
@@ -1595,6 +1612,7 @@ async function deleteSaleGroup(idsStr){
 /* ---------- NOTAS (custos) ---------- */
 let notas = [];
 let notaEntries = [];
+let editingNotaId = null;
 
 async function loadNotas(){
   const el = document.getElementById('notasList');
@@ -1607,7 +1625,23 @@ async function loadNotas(){
   }
   notas = notasData || [];
   notaEntries = entriesData || [];
+  renderConsumoSummary();
   renderNotasList();
+}
+
+function renderConsumoSummary(){
+  const el = document.getElementById('consumoSummary');
+  if(!el) return;
+  const consumoT = notaEntries.filter(e=>e.type==='consumo_thamirys').reduce((s,e)=>s+Number(e.amount),0);
+  const consumoR = notaEntries.filter(e=>e.type==='consumo_renata').reduce((s,e)=>s+Number(e.amount),0);
+  const consumoC = notaEntries.filter(e=>e.type==='consumo_ceia').reduce((s,e)=>s+Number(e.amount),0);
+  const totalConsumo = consumoT + consumoR + consumoC;
+  el.innerHTML = `
+    <div style="font-size:15px;font-weight:700;margin-bottom:6px;">Estamos devendo pra loja: ${formatMoney(totalConsumo)}</div>
+    <div>Thamirys deve: ${formatMoney(consumoT)}</div>
+    <div>Renata deve: ${formatMoney(consumoR)}</div>
+    <div>Ceia deve: ${formatMoney(consumoC)}</div>
+  `;
 }
 
 function renderNotasList(){
@@ -1629,20 +1663,77 @@ function renderNotasList(){
     const consumoC = entries.filter(e=>e.type==='consumo_ceia').reduce((s,e)=>s+Number(e.amount),0);
     const saldo = Number(n.total_amount) - liquidado - consumoT - consumoR - consumoC;
     const dateStr = new Date(n.nota_date + 'T00:00:00').toLocaleDateString('pt-BR');
+
+    const typeLabels = {
+      liquidacao: 'Liquidação',
+      consumo_thamirys: 'Consumo Thamirys',
+      consumo_renata: 'Consumo Renata',
+      consumo_ceia: 'Consumo Ceia'
+    };
+
+    // lista de lançamentos individuais, cada um com valor editável e botão de excluir
+    const entriesListHtml = entries.length > 0 ? `
+      <div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.08);">
+        <div style="font-weight:700;font-size:12.5px;margin-bottom:6px;">Lançamentos</div>
+        ${entries.map(e => `
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">
+            <span style="font-size:12px;color:#666;flex:1;min-width:110px;">${typeLabels[e.type] || e.type}${e.account ? ' (' + e.account + ')' : ''}</span>
+            <input type="number" step="0.01" value="${e.amount}" id="entry-${e.id}" style="width:90px;margin-bottom:0;">
+            <button class="icon-btn" style="padding:3px 8px;font-size:11px;" onclick="editNotaEntry('${e.id}')">Salvar</button>
+            <button class="icon-btn" style="padding:3px 8px;font-size:11px;" onclick="deleteNotaEntry('${e.id}')">✕</button>
+          </div>
+        `).join('')}
+      </div>
+    ` : '';
+
+    // modo de edição da nota (total, pago por, data, loja)
+    const isEditingNota = editingNotaId === n.id;
+    const headerHtml = isEditingNota ? `
+      <div class="sale-info" style="width:100%;">
+        <div class="field" style="margin-bottom:6px;">
+          <label style="font-size:11px;">Nome da loja</label>
+          <input type="text" id="edit-store-${n.id}" value="${n.store_name ? n.store_name.replace(/"/g,'&quot;') : ''}" style="margin-bottom:0;">
+        </div>
+        <div class="field" style="margin-bottom:6px;">
+          <label style="font-size:11px;">Data</label>
+          <input type="date" id="edit-date-${n.id}" value="${n.nota_date}" style="margin-bottom:0;">
+        </div>
+        <div class="field" style="margin-bottom:6px;">
+          <label style="font-size:11px;">Pago por</label>
+          <input type="text" id="edit-paidby-${n.id}" value="${n.paid_by ? n.paid_by.replace(/"/g,'&quot;') : ''}" style="margin-bottom:0;">
+        </div>
+        <div class="field" style="margin-bottom:6px;">
+          <label style="font-size:11px;">Valor total</label>
+          <input type="number" step="0.01" id="edit-total-${n.id}" value="${n.total_amount}" style="margin-bottom:0;">
+        </div>
+        <div style="display:flex;gap:6px;">
+          <button class="icon-btn" onclick="saveNotaEdit('${n.id}')">Salvar nota</button>
+          <button class="icon-btn" onclick="cancelNotaEdit()">Cancelar</button>
+        </div>
+      </div>
+    ` : `
+      <div class="sale-info">
+        <div class="sale-name">${n.store_name ? n.store_name : 'Nota de ' + dateStr}</div>
+        <div class="sale-sub">${n.store_name ? dateStr + ' • ' : ''}Pago por: ${n.paid_by || '-'} • Valor total: ${formatMoney(n.total_amount)}</div>
+        <div class="sale-total" style="${saldo<=0 ? 'color:#1a7a1a;' : ''}">Saldo a liquidar: ${formatMoney(saldo)}</div>
+        <div style="font-size:12px;color:#777;margin-top:4px;">
+          Liquidado por Thamirys: ${formatMoney(liquidadoThamirys)} • Liquidado por Renata: ${formatMoney(liquidadoRenata)}<br>
+          Consumo Thamirys: ${formatMoney(consumoT)} • Consumo Renata: ${formatMoney(consumoR)} • Consumo Ceia: ${formatMoney(consumoC)}
+        </div>
+      </div>
+    `;
+
     return `
     <div class="card-box" style="margin-bottom:14px;">
       <div class="sale-top">
-        <div class="sale-info">
-          <div class="sale-name">${n.store_name ? n.store_name : 'Nota de ' + dateStr}</div>
-          <div class="sale-sub">${n.store_name ? dateStr + ' • ' : ''}Pago por: ${n.paid_by || '-'} • Valor total: ${formatMoney(n.total_amount)}</div>
-          <div class="sale-total" style="${saldo<=0 ? 'color:#1a7a1a;' : ''}">Saldo a liquidar: ${formatMoney(saldo)}</div>
-          <div style="font-size:12px;color:#777;margin-top:4px;">
-            Liquidado por Thamirys: ${formatMoney(liquidadoThamirys)} • Liquidado por Renata: ${formatMoney(liquidadoRenata)}<br>
-            Consumo Thamirys: ${formatMoney(consumoT)} • Consumo Renata: ${formatMoney(consumoR)} • Consumo Ceia: ${formatMoney(consumoC)}
-          </div>
-        </div>
-        <button class="icon-btn" onclick="deleteNota('${n.id}')">Excluir nota</button>
+        ${headerHtml}
+        ${!isEditingNota ? `
+        <div style="display:flex;flex-direction:column;gap:6px;flex:none;">
+          <button class="icon-btn" onclick="startNotaEdit('${n.id}')">Editar</button>
+          <button class="icon-btn" onclick="deleteNota('${n.id}')">Excluir nota</button>
+        </div>` : ''}
       </div>
+      ${entriesListHtml}
       <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
         <input type="number" step="0.01" placeholder="Valor liquidado" id="liq-${n.id}" style="flex:1;min-width:100px;margin-bottom:0;">
         <select id="liq-account-${n.id}" style="width:auto;margin-bottom:0;">
@@ -1780,6 +1871,74 @@ async function deleteNota(id){
   const { error } = await sb.from('notas').delete().eq('id', id);
   if(error){ showToast('Erro ao excluir', error.message); return; }
   showToast('Nota excluída');
+  loadNotas();
+}
+
+function startNotaEdit(id){
+  editingNotaId = id;
+  renderNotasList();
+}
+
+function cancelNotaEdit(){
+  editingNotaId = null;
+  renderNotasList();
+}
+
+async function saveNotaEdit(id){
+  const storeName = document.getElementById(`edit-store-${id}`).value.trim();
+  const date = document.getElementById(`edit-date-${id}`).value;
+  const paidBy = document.getElementById(`edit-paidby-${id}`).value.trim();
+  const total = parseFloat(document.getElementById(`edit-total-${id}`).value);
+
+  if(!date || isNaN(total)){
+    showToast('Preencha data e valor total corretamente');
+    return;
+  }
+
+  const { error } = await sb.from('notas').update({
+    store_name: storeName || null,
+    nota_date: date,
+    paid_by: paidBy || null,
+    total_amount: total
+  }).eq('id', id);
+
+  if(error){
+    showToast('Erro ao salvar nota', error.message);
+    console.error(error);
+    return;
+  }
+
+  showToast('Nota atualizada');
+  editingNotaId = null;
+  loadNotas();
+}
+
+async function editNotaEntry(entryId){
+  const input = document.getElementById(`entry-${entryId}`);
+  const amount = parseFloat(input.value);
+  if(isNaN(amount) || amount <= 0){
+    showToast('Informe um valor válido');
+    return;
+  }
+  const { error } = await sb.from('nota_entries').update({ amount }).eq('id', entryId);
+  if(error){
+    showToast('Erro ao salvar lançamento', error.message);
+    console.error(error);
+    return;
+  }
+  showToast('Lançamento atualizado');
+  loadNotas();
+}
+
+async function deleteNotaEntry(entryId){
+  if(!confirm('Excluir esse lançamento?')) return;
+  const { error } = await sb.from('nota_entries').delete().eq('id', entryId);
+  if(error){
+    showToast('Erro ao excluir lançamento', error.message);
+    console.error(error);
+    return;
+  }
+  showToast('Lançamento excluído');
   loadNotas();
 }
 
