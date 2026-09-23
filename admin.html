@@ -408,6 +408,11 @@
             <option value="Entregue">Entregue</option>
             <option value="Reservado">Reservado</option>
           </select>
+          <select id="filterAccount" onchange="applyFilters()" style="width:auto;margin-bottom:0;">
+            <option value="all">Conta: Todos</option>
+            <option value="Thamirys">Thamirys</option>
+            <option value="Renata">Renata</option>
+          </select>
         </div>
         <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
           <select id="summaryMode" onchange="onSummaryModeChange()" style="width:auto;margin-bottom:0;">
@@ -1323,10 +1328,12 @@ function onSummaryModeChange(){
 async function applyFilters(){
   const payment = document.getElementById('filterPayment').value;
   const delivery = document.getElementById('filterDelivery').value;
+  const account = document.getElementById('filterAccount').value;
   const clientQuery = normalizeSearchText(document.getElementById('filterClient').value.trim());
   let filtered = allSales;
   if(payment !== 'all') filtered = filtered.filter(s => s.payment_status === payment);
   if(delivery !== 'all') filtered = filtered.filter(s => s.delivery_status === delivery);
+  if(account !== 'all') filtered = filtered.filter(s => s.account === account);
   if(clientQuery) filtered = filtered.filter(s => normalizeSearchText(s.client_name || '').includes(clientQuery));
 
   // o filtro de mês só afeta o resumo de totais, não a lista de vendas exibida
@@ -1445,7 +1452,8 @@ function groupSales(sales){
 async function moveSaleGroup(idsStr, direction){
   const payment = document.getElementById('filterPayment').value;
   const delivery = document.getElementById('filterDelivery').value;
-  if(payment !== 'all' || delivery !== 'all'){
+  const account = document.getElementById('filterAccount').value;
+  if(payment !== 'all' || delivery !== 'all' || account !== 'all'){
     showToast('Remova os filtros (deixe em "Todos") antes de reordenar as vendas');
     return;
   }
